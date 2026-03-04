@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'login_screen.dart';
 
 void main() {
   runApp(const YemekhaneApp());
@@ -18,7 +19,7 @@ class YemekhaneApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.orange),
         useMaterial3: true,
       ),
-      home: const PackagesScreen(),
+      home: const LoginScreen(),
     );
   }
 }
@@ -44,7 +45,7 @@ class _PackagesScreenState extends State<PackagesScreen> {
     try {
       // DİKKAT: Eğer Android Emulator'de deneyecekseniz 'localhost' yerine '10.0.2.2' yazmanız gerekir!
       // Chrome (Web) üzerinde deniyorsak 'localhost' kusursuz çalışır.
-      final response = await http.get(Uri.parse('http://localhost:3000/api/v1/packages'));
+      final response = await http.get(Uri.parse('http://localhost:3001/api/v1/packages'));
       
       if (response.statusCode == 200) {
         setState(() {
@@ -116,7 +117,7 @@ class _PackagesScreenState extends State<PackagesScreen> {
                                         foregroundColor: Colors.white),
                                     onPressed: () async {
                                       final res = await http.post(
-                                        Uri.parse('http://localhost:3000/api/v1/orders'),
+                                        Uri.parse('http://localhost:3001/api/v1/orders'),
                                         headers: {"Content-Type": "application/json"},
                                         body: json.encode({"package_id": pkg['id']}),
                                       );
