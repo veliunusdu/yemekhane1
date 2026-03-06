@@ -1,7 +1,12 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:flutter/foundation.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'login_screen.dart';
+import 'api_config.dart';
+import 'screens/payment_page.dart';
 
 void main() {
   runApp(const YemekhaneApp());
@@ -34,18 +39,25 @@ class PackagesScreen extends StatefulWidget {
 class _PackagesScreenState extends State<PackagesScreen> {
   List<dynamic> packages = [];
   bool isLoading = true;
+  String? userEmail;
 
   @override
   void initState() {
     super.initState();
+    _loadLocalData();
     fetchPackages();
+  }
+
+  Future<void> _loadLocalData() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      userEmail = prefs.getString('user_email');
+    });
   }
 
   Future<void> fetchPackages() async {
     try {
-      // DİKKAT: Eğer Android Emulator'de deneyecekseniz 'localhost' yerine '10.0.2.2' yazmanız gerekir!
-      // Chrome (Web) üzerinde deniyorsak 'localhost' kusursuz çalışır.
-      final response = await http.get(Uri.parse('http://localhost:3001/api/v1/packages'));
+      final response = await http.get(Uri.parse('$apiBaseUrl/api/v1/packages'));
       
       if (response.statusCode == 200) {
         setState(() {
@@ -88,7 +100,7 @@ class _PackagesScreenState extends State<PackagesScreen> {
                         padding: const EdgeInsets.all(12.0),
                         child: Row(
                           children: [
-                            // Yemek İkonu
+                             // Yemek Fotoğrafı veya İkonu
                             Container(
                               width: 60,
                               height: 60,
@@ -96,7 +108,17 @@ class _PackagesScreenState extends State<PackagesScreen> {
                                 color: Colors.orange.withOpacity(0.2),
                                 borderRadius: BorderRadius.circular(8),
                               ),
-                              child: const Icon(Icons.fastfood, color: Colors.orange, size: 30),
+                              child: pkg['image_url'] != null && pkg['image_url'] != ""
+                                  ? ClipRRect(
+                                      borderRadius: BorderRadius.circular(8),
+                                      child: Image.network(
+                                        pkg['image_url'],
+                                        fit: BoxFit.cover,
+                                        errorBuilder: (context, error, stackTrace) =>
+                                            const Icon(Icons.fastfood, color: Colors.orange, size: 30),
+                                      ),
+                                    )
+                                  : const Icon(Icons.fastfood, color: Colors.orange, size: 30),
                             ),
                             const SizedBox(width: 16),
                             
@@ -116,15 +138,114 @@ class _PackagesScreenState extends State<PackagesScreen> {
                                         backgroundColor: Colors.green,
                                         foregroundColor: Colors.white),
                                     onPressed: () async {
+                                      // 1. Backend'den Payment URL iste
                                       final res = await http.post(
-                                        Uri.parse('http://localhost:3001/api/v1/orders'),
+                                        Uri.parse('$apiBaseUrl/api/v1/payments/initialize'),
                                         headers: {"Content-Type": "application/json"},
-                                        body: json.encode({"package_id": pkg['id']}),
+                                        body: json.encode({
+                                          "package_id": pkg['id'],
+                                          "price": pkg['discounted_price'].toString(),
+                                          "email": userEmail ?? "bilinmeyen@kullanici.com",
+                                          "name": "Kullanici",
+                                          "surname": "Siparisci"
+                                        }),
                                       );
-                                      if (res.statusCode == 201) {
+
+                                      if (res.statusCode == 200) {
+                                        final data = json.decode(res.body);
+                                        final String? paymentUrl = (data['paymentPageUrl'] as String?)?.trim();
+                                        final String token = (data['token'] as String?) ?? '';
+                                        
+                                        if (paymentUrl == null || paymentUrl.isEmpty) {
+                                           ScaffoldMessenger.of(context).showSnackBar(
+                                            const SnackBar(content: Text("Ödeme linki alınamadı, lütfen tekrar deneyin.")));
+                                           return;
+                                        }
+
+                                        // 2. Web'te yeni sekmede aç, mobilde WebView kullan
+                                        bool? result = false;
+                                        if (kIsWeb) {
+                                          if (!await launchUrl(Uri.parse(paymentUrl), mode: LaunchMode.externalApplication)) {
+                                            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Ödeme sayfası açılamadı')));
+                                            return;
+                                          }
+                                          // Kullanıcı ödemeyi yeni sekmede yapıp dönünce onaylaması için dialog göster
+                                          result = await showDialog<bool>(
+                                            context: context,
+                                            barrierDismissible: false,
+                                            builder: (context) => AlertDialog(
+                                              title: const Text("Ödeme İşlemi"),
+                                              content: const Text("Açılan yeni sekmede (Iyzico) 3D Secure işleminizi tamamlayın. 'Siparişiniz Başarıyla Alındı' mesajını gördükten veya sayfa yönlendirmesi bittikten sonra buradaki 'İşlemi Kontrol Et' butonuna tıklayın.\n\nEğer sekme açılmadıysa tarayıcınızın pop-up engelleyicisini kontrol edin."),
+                                              actions: [
+                                                TextButton(
+                                                  onPressed: () => Navigator.pop(context, false),
+                                                  child: const Text("İptal", style: TextStyle(color: Colors.red)),
+                                                ),
+                                                ElevatedButton(
+                                                  onPressed: () => Navigator.pop(context, true),
+                                                  child: const Text("İşlemi Kontrol Et"),
+                                                ),
+                                              ],
+                                            ),
+                                          );
+                                        } else {
+                                          result = await Navigator.push(
+                                            context,
+                                            MaterialPageRoute(
+                                              builder: (context) => PaymentPage(paymentUrl: paymentUrl),
+                                            ),
+                                          );
+                                        }
+
+                                        // 3. Başarı veya Hata Senaryosu
+                                        if (result == true) {
+                                          ScaffoldMessenger.of(context).showSnackBar(
+                                            const SnackBar(content: Text("Ödeme kontrol ediliyor... Lütfen bekleyin."))
+                                          );
+
+                                          // 4. Backend'e token ile durum sorgusu yap
+                                          try {
+                                            final checkRes = await http.post(
+                                              Uri.parse('$apiBaseUrl/api/v1/payments/check'),
+                                              headers: {"Content-Type": "application/json"},
+                                              body: json.encode({
+                                                "token": token,
+                                                "package_id": pkg['id'],
+                                                "buyer_email": userEmail ?? "bilinmeyen@kullanici.com"
+                                              }),
+                                            );
+
+                                            if (checkRes.statusCode == 200) {
+                                              final checkData = json.decode(checkRes.body);
+                                              if (checkData['status'] == 'success') {
+                                                ScaffoldMessenger.of(context).showSnackBar(
+                                                  const SnackBar(content: Text("✅ Sipariş Alındı! Afiyet olsun."))
+                                                );
+                                                fetchPackages();
+                                              } else {
+                                                ScaffoldMessenger.of(context).showSnackBar(
+                                                  const SnackBar(content: Text("❌ Ödeme başarısız veya iptal edildi."))
+                                                );
+                                              }
+                                            } else {
+                                              ScaffoldMessenger.of(context).showSnackBar(
+                                                  const SnackBar(content: Text("❌ Ödeme doğrulanamadı. Lütfen destekle iletişime geçin."))
+                                                );
+                                            }
+                                          } catch(e) {
+                                            ScaffoldMessenger.of(context).showSnackBar(
+                                                const SnackBar(content: Text("❌ Bağlantı hatası: Ödeme durumu doğrulanamadı!"))
+                                              );
+                                          }
+                                          
+                                        } else {
+                                          ScaffoldMessenger.of(context).showSnackBar(
+                                            const SnackBar(content: Text("❌ Ödeme işlemi yarım kaldı."))
+                                          );
+                                        }
+                                      } else {
                                         ScaffoldMessenger.of(context).showSnackBar(
-                                            const SnackBar(content: Text("✅ Sipariş Alındı! Afiyet olsun.")));
-                                        fetchPackages(); // Listeyi yenileyip stoğun düştüğünü gör
+                                            const SnackBar(content: Text("Ödeme başlatılamadı!")));
                                       }
                                     },
                                     child: const Text("Hemen Al"),

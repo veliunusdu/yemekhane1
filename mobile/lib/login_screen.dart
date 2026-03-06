@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
+import 'api_config.dart';
 import 'main.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -15,9 +17,8 @@ class _LoginScreenState extends State<LoginScreen> {
   final TextEditingController _passwordController = TextEditingController();
   bool _isLoading = false;
 
-  // API base URL - Android Emulatör için 10.0.2.2, iOS/Web için localhost
-  // Windows/Web üzerinde deniyorsanız 'localhost' kalsın.
-  final String _baseUrl = 'http://localhost:3001';
+  // API base URL - platforma göre otomatik seçilir (api_config.dart)
+  String get _baseUrl => apiBaseUrl;
 
   Future<void> _handleLogin() async {
     if (_emailController.text.isEmpty || _passwordController.text.isEmpty) {
@@ -42,6 +43,10 @@ class _LoginScreenState extends State<LoginScreen> {
       // final data = jsonDecode(response.body); // This line is no longer needed here as data is parsed within the else block
 
       if (response.statusCode == 200) {
+        // Oturum bilgilerini SharedPreferences'a kaydet
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('user_email', _emailController.text.trim());
+
         // Başarılı giriş
         if (!mounted) return;
         Navigator.pushReplacement(
