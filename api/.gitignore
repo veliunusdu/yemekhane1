@@ -1,0 +1,14 @@
+# Logs
+api.log
+*.log
+
+# Build artifacts
+main.exe
+*.exe
+
+# Local files
+file_list.txt
+test_redis.ps1
+
+# Dependencies
+vendor/
