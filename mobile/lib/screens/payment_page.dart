@@ -28,9 +28,16 @@ class _PaymentPageState extends State<PaymentPage> {
       )
       ..setNavigationDelegate(
         NavigationDelegate(
+          onNavigationRequest: (NavigationRequest request) {
+            String url = request.url;
+            if (url.contains('iyzico-callback') || url.contains('yemekhane_callback')) {
+              Navigator.pop(context, true);
+              return NavigationDecision.prevent;
+            }
+            return NavigationDecision.navigate;
+          },
           onPageStarted: (String url) {
-            // Iyzico 3D onayı bittikten sonra bu URL'ye POST yönlendirmesi yapar
-            if (url.contains('yemekhane_callback')) {
+            if (url.contains('iyzico-callback') || url.contains('yemekhane_callback')) {
               Navigator.pop(context, true);
               return;
             }
@@ -38,8 +45,7 @@ class _PaymentPageState extends State<PaymentPage> {
           },
           onPageFinished: (_) => setState(() => _isLoading = false),
           onWebResourceError: (WebResourceError error) {
-            // Callback URL'sine yönlendirilince DNS hatası normaldir, kapatma
-            if (error.url?.contains('yemekhane_callback') == true) {
+            if (error.url?.contains('iyzico-callback') == true || error.url?.contains('yemekhane_callback') == true) {
               Navigator.pop(context, true);
               return;
             }
