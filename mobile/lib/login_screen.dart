@@ -47,11 +47,22 @@ class _LoginScreenState extends State<LoginScreen> {
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('user_email', _emailController.text.trim());
 
+        // Supabase access_token'ı da kaydet (siparişler için gerekli)
+        try {
+          final data = json.decode(response.body);
+          final String? token = data['access_token'] as String?;
+          if (token != null && token.isNotEmpty) {
+            await prefs.setString('supabase_token', token);
+          }
+        } catch (e) {
+          // Token parse edilemezse devam et
+        }
+
         // Başarılı giriş
         if (!mounted) return;
         Navigator.pushReplacement(
           context,
-          MaterialPageRoute(builder: (context) => const PackagesScreen()),
+          MaterialPageRoute(builder: (context) => const MainNavigationScreen()),
         );
       } else {
         String errorMsg = 'Giriş başarısız.';

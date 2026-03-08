@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import Link from "next/link";
 
 export default function Home() {
   const [formData, setFormData] = useState({
@@ -131,9 +132,17 @@ export default function Home() {
   return (
     <main className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
       <div className="bg-white p-8 rounded-xl shadow-lg w-full max-w-md">
-        <h1 className="text-2xl font-bold mb-6 text-gray-800">
-          İşletme Paneli
-        </h1>
+        <div className="flex justify-between items-center mb-6">
+          <h1 className="text-2xl font-bold text-gray-800">
+            İşletme Paneli
+          </h1>
+          <Link 
+            href="/scanner" 
+            className="bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded-lg font-bold text-sm transition-colors flex items-center gap-2"
+          >
+            📸 QR Oku
+          </Link>
+        </div>
         <p className="text-gray-500 mb-6 text-sm">
           Satışa sunmak istediğiniz indirimli paketi ekleyin.
         </p>
