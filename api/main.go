@@ -614,6 +614,103 @@ func main() {
 		return c.Redirect("https://app.yemekhane.com/payment/error", 302)
 	})
 
+	// API Rotası 10: QR Okuma & Teslimat Onayı (Kantin Tarafı)
+	app.Post("/api/v1/delivery/confirm", func(c *fiber.Ctx) error {
+		// Normalde burada Admin JWT Authorization kontrolü yapılır.
+		// Şimdilik MVP için basit bir JSON "order_id" alıyoruz
+		var req struct {
+			OrderID string `json:"order_id"`
+		}
+
+		if err := c.BodyParser(&req); err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": "Geçersiz İstek Formatı"})
+		}
+
+		if req.OrderID == "" {
+			return c.Status(400).JSON(fiber.Map{"error": "order_id eksik veya boş"})
+		}
+
+		// Veritabanında siparişin durumunu çekelim
+		var status string
+		err := db.QueryRow("SELECT status FROM orders WHERE id = $1", req.OrderID).Scan(&status)
+		if err != nil {
+			if err.Error() == "sql: no rows in result set" {
+				return c.Status(404).JSON(fiber.Map{"error": "Sipariş bulunamadı"})
+			}
+			return c.Status(500).JSON(fiber.Map{"error": "Veritabanı okuma hatası"})
+		}
+
+		// Durum kontrolü
+		if status == "Teslim Edildi" {
+			return c.Status(400).JSON(fiber.Map{"error": "Bu paket zaten teslim alınmış/kullanılmış!"})
+		}
+		if status != "Ödendi" {
+			return c.Status(400).JSON(fiber.Map{"error": "Bu paketin ödemesi tamamlanmamış (Durum: " + status + ")"})
+		}
+
+		// Sipariş Ödenmiş, şimdi "Teslim Edildi" yapıyoruz
+		_, updateErr := db.Exec("UPDATE orders SET status = 'Teslim Edildi' WHERE id = $1", req.OrderID)
+		if updateErr != nil {
+			log.Println("❌ Teslimat güncelleme hatası:", updateErr)
+			return c.Status(500).JSON(fiber.Map{"error": "Teslimat onaylanırken sistemsel bir hata oluştu"})
+		}
+
+		log.Printf("✅ Sipariş başarıyla teslim edildi. Sipariş ID: %s", req.OrderID)
+		return c.Status(200).JSON(fiber.Map{"message": "Sipariş başarıyla teslim edildi ✅", "order_id": req.OrderID})
+	})
+
+	// API Rotası 11: Kullanıcının Siparişlerini Çekme (Flutter Siparişlerim UI Kullanır)
+	app.Get("/api/v1/orders/me", func(c *fiber.Ctx) error {
+		// Kullanıcının emailini query param'dan al
+		buyerEmail := c.Query("email")
+		if buyerEmail == "" {
+			return c.Status(400).JSON(fiber.Map{"error": "email parametresi gerekli"})
+		}
+
+		rows, err := db.Query(`
+			SELECT o.id, o.package_id, p.name, o.status, o.created_at 
+			FROM orders o
+			LEFT JOIN packages p ON o.package_id = p.id
+			WHERE o.buyer_email = $1 
+			ORDER BY o.created_at DESC
+		`, buyerEmail)
+
+		if err != nil {
+			log.Println("Siparişleri çekerken hata:", err)
+			return c.Status(500).JSON(fiber.Map{"error": "Siparişler getirilemedi"})
+		}
+		defer rows.Close()
+
+		var orders []map[string]interface{}
+		for rows.Next() {
+			var id, packageID, status string
+			var packageName sql.NullString
+			var createdAt time.Time
+			if err := rows.Scan(&id, &packageID, &packageName, &status, &createdAt); err != nil {
+				continue
+			}
+
+			pkgName := packageID // Fallback: paket silinmişse ID göster
+			if packageName.Valid && packageName.String != "" {
+				pkgName = packageName.String
+			}
+
+			orders = append(orders, map[string]interface{}{
+				"id":           id,
+				"package_id":   packageID,
+				"package_name": pkgName,
+				"status":       status,
+				"created_at":   createdAt,
+			})
+		}
+
+		if orders == nil {
+			orders = []map[string]interface{}{} // null gitmesini önle
+		}
+
+		return c.Status(200).JSON(orders)
+	})
+
 	// 5. Sunucuyu Dinlemeye Başla
 	log.Println("Yemekhane API 3001 portunda başarıyla çalışıyor! 🚀")
 	log.Fatal(app.Listen(":3001"))
