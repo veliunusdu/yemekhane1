@@ -406,7 +406,7 @@ func main() {
 				Price:               reqData.Price,
 				BasketId:            "B" + uuid.New().String()[0:8],
 				PaymentGroup:        "PRODUCT",
-				CallbackUrl:         "https://example.com/yemekhane_callback", // Unique URL to intercept in WebView's onPageStarted (since Android ignores POSTs in onNavigationRequest)
+				CallbackUrl:         "https://www.google.com/yemekhane_callback", // Android'in SSL (net_error -202) hatasından (ve Iyzico `httpsurl` doğrulamasından) kaçmak için güvenli temsili Google SSL adresi.
 				Currency:            "TRY",
 				PaidPrice:           reqData.Price, // İndirim yoksa Price ile aynı
 				EnabledInstallments: []string{"1", "2", "3", "6", "9"},
@@ -451,7 +451,7 @@ func main() {
 		reqBytes, _ := json.MarshalIndent(req, "", "  ")
 		log.Printf("Iyzico'ya giden istek: %s", string(reqBytes))
 
-		res, err := client.CheckoutFormPaymentRequest(req, "popup") // popup = WebView'da tam ekran açılır, iframe gibi CSP kısıtlaması yok
+		res, err := client.CheckoutFormPaymentRequest(req, "iframe") // "iframe" SDK bug'ını aşmak için zorunludur.
 		if err != nil {
 			log.Printf("❌ Iyzico API isteği hata fırlattı: %v", err)
 			return c.Status(500).JSON(fiber.Map{"error": "Iyzico bağlantı hatası: " + err.Error()})
