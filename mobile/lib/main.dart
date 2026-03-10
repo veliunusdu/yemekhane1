@@ -8,6 +8,7 @@ import 'login_screen.dart';
 import 'api_config.dart';
 import 'screens/payment_page.dart';
 import 'screens/orders_screen.dart';
+import 'screens/map_screen.dart';
 
 void main() {
   runApp(const YemekhaneApp());
@@ -98,6 +99,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   static const List<Widget> _widgetOptions = <Widget>[
     PackagesScreen(),
     OrdersScreen(),
+    MapScreen(),
   ];
 
   void _onItemTapped(int index) {
@@ -121,6 +123,10 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
           BottomNavigationBarItem(
             icon: Icon(Icons.receipt_long),
             label: 'Siparişlerim',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.map),
+            label: 'Harita',
           ),
         ],
         currentIndex: _selectedIndex,
