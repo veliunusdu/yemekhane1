@@ -4,14 +4,144 @@ import 'package:http/http.dart' as http;
 import 'package:flutter/foundation.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'login_screen.dart';
 import 'api_config.dart';
 import 'screens/payment_page.dart';
 import 'screens/orders_screen.dart';
 import 'screens/map_screen.dart';
 
-void main() {
+// Ön plan bildirim kanalı (Android için)
+final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
+    FlutterLocalNotificationsPlugin();
+
+const AndroidNotificationChannel fcmChannel = AndroidNotificationChannel(
+  'yemekhane_high',
+  'Yemekhane Bildirimi',
+  description: 'Sipariş durumu ve paket bildirimleri',
+  importance: Importance.high,
+);
+
+/// Arka planda gelen FCM mesajlarını işle (top-level fonksiyon olmalı)
+@pragma('vm:entry-point')
+Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  if (!kIsWeb) {
+    await Firebase.initializeApp();
+    debugPrint('FCM arka plan mesajı: ${message.messageId}');
+  }
+}
+
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  // Firebase başlat (google-services.json gerekir, Web'de options yoksa çöker)
+  if (!kIsWeb) {
+    await Firebase.initializeApp();
+
+    // Arka plan FCM handler'ı kaydet
+    FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+
+    // Yerel bildirim kanalını oluştur (Android 8+)
+    await flutterLocalNotificationsPlugin
+        .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>()
+        ?.createNotificationChannel(fcmChannel);
+
+    await _initLocalNotifications();
+    await _setupFCM();
+  }
+
+  // Supabase başlat
+  await Supabase.initialize(
+    url: 'https://hnoskshrnactwcexwtjo.supabase.co',
+    anonKey:
+        'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imhub3Nrc2hybmFjdHdjZXh3dGpvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI2NDg1NzgsImV4cCI6MjA4ODIyNDU3OH0.8AbxhRwriiGhkNzWaKKfj39xSR8oulHSY2Q0gvPECeg',
+  );
+
   runApp(const YemekhaneApp());
+}
+
+/// Yerel bildirim plugin başlatma
+Future<void> _initLocalNotifications() async {
+  const AndroidInitializationSettings androidSettings =
+      AndroidInitializationSettings('@mipmap/ic_launcher');
+  const InitializationSettings initSettings =
+      InitializationSettings(android: androidSettings);
+  await flutterLocalNotificationsPlugin.initialize(initSettings);
+}
+
+/// FCM izin + token alma + ön plan mesaj dinleyici
+Future<void> _setupFCM() async {
+  final messaging = FirebaseMessaging.instance;
+
+  // Bildirim izni iste
+  final settings = await messaging.requestPermission(
+    alert: true,
+    badge: true,
+    sound: true,
+  );
+  debugPrint('FCM izin durumu: ${settings.authorizationStatus}');
+
+  // iOS ön plan bildirimleri için
+  await messaging.setForegroundNotificationPresentationOptions(
+    alert: true,
+    badge: true,
+    sound: true,
+  );
+
+  // FCM Token al ve backend'e kaydet
+  final token = await messaging.getToken();
+  if (token != null) {
+    debugPrint('FCM Token: $token');
+    await _saveFCMTokenToBackend(token);
+  }
+
+  // Token yenilenince tekrar kaydet
+  messaging.onTokenRefresh.listen((newToken) {
+    _saveFCMTokenToBackend(newToken);
+  });
+
+  // Uygulama açıkken gelen FCM → yerel bildirim göster
+  FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+    final notification = message.notification;
+    if (notification != null) {
+      flutterLocalNotificationsPlugin.show(
+        notification.hashCode,
+        notification.title,
+        notification.body,
+        NotificationDetails(
+          android: AndroidNotificationDetails(
+            fcmChannel.id,
+            fcmChannel.name,
+            channelDescription: fcmChannel.description,
+            icon: '@mipmap/ic_launcher',
+            importance: Importance.high,
+            priority: Priority.high,
+          ),
+        ),
+      );
+    }
+  });
+}
+
+/// Backend'e FCM token'ı kaydet
+Future<void> _saveFCMTokenToBackend(String token) async {
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    final email = prefs.getString('user_email');
+    if (email == null || email.isEmpty) return;
+    await http.post(
+      Uri.parse('$apiBaseUrl/api/v1/device-token'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({'email': email, 'fcm_token': token}),
+    );
+    debugPrint('FCM token backend\'e kaydedildi: $email');
+  } catch (e) {
+    debugPrint('FCM token kayıt hatası: $e');
+  }
 }
 
 class YemekhaneApp extends StatelessWidget {

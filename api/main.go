@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -12,6 +13,8 @@ import (
 	"strconv"
 	"time"
 
+	fire "firebase.google.com/go/v4"
+	"firebase.google.com/go/v4/messaging"
 	iyzipay "github.com/JspBack/iyzipay-go"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
@@ -21,6 +24,7 @@ import (
 	_ "github.com/lib/pq"
 	"github.com/redis/go-redis/v9"
 	"github.com/resend/resend-go/v2"
+	"google.golang.org/api/option"
 
 	// Kendi modül adınla değiştirmeyi unutma!
 	"github.com/veliunusdu/yemekhane1/internal/domain"
@@ -28,6 +32,56 @@ import (
 
 var ctx = context.Background()
 var redisClient *redis.Client
+var fcmClient *messaging.Client
+
+// FCM bildirim helper — tek bir token'a gönderir
+func sendFCMNotification(token, title, body string) {
+	if fcmClient == nil {
+		log.Println("⚠️ FCM client hazır değil, bildirim atlandı.")
+		return
+	}
+	message := &messaging.Message{
+		Notification: &messaging.Notification{
+			Title: title,
+			Body:  body,
+		},
+		Token: token,
+	}
+	_, err := fcmClient.Send(ctx, message)
+	if err != nil {
+		log.Printf("❌ FCM gönderim hatası: %v", err)
+	} else {
+		log.Printf("🔔 FCM gönderildi → token: %s...%s", token[:6], token[len(token)-4:])
+	}
+}
+
+// Kullanıcının email'ine göre FCM token'a bildirim gönderir
+func sendFCMToEmail(db *sql.DB, email, title, body string) {
+	var token string
+	err := db.QueryRow("SELECT fcm_token FROM device_tokens WHERE user_email = $1", email).Scan(&token)
+	if err != nil {
+		log.Printf("⚠️ %s için FCM token bulunamadı", email)
+		return
+	}
+	sendFCMNotification(token, title, body)
+}
+
+// Tüm kayıtlı kullanıcılara gönderir
+func sendFCMToAll(db *sql.DB, title, body string) {
+	rows, err := db.Query("SELECT fcm_token FROM device_tokens")
+	if err != nil {
+		log.Println("⚠️ device_tokens sorgu hatası:", err)
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var token string
+		if err := rows.Scan(&token); err != nil {
+			continue
+		}
+		sendFCMNotification(token, title, body)
+	}
+}
 
 // Resend ile E-posta Gönder
 func sendSuccessEmail(targetEmail string, paymentID string) {
@@ -116,12 +170,37 @@ func main() {
 		package_id UUID,
 		user_id VARCHAR(50),
 		buyer_email VARCHAR(255),
-		status VARCHAR(20),
+		status VARCHAR(50),
 		created_at TIMESTAMP
 	);`
 	db.Exec(createOrderTableQuery)
 	// Gelecekteki veya mevcut migration'lar için safe bir ALTER:
 	db.Exec("ALTER TABLE orders ADD COLUMN IF NOT EXISTS buyer_email VARCHAR(255);")
+	db.Exec("ALTER TABLE orders ALTER COLUMN status TYPE VARCHAR(50);")
+
+	// FCM Token tablosu (Push Notification için)
+	db.Exec(`CREATE TABLE IF NOT EXISTS device_tokens (
+		user_email VARCHAR(255) PRIMARY KEY,
+		fcm_token  TEXT NOT NULL,
+		updated_at TIMESTAMP
+	);`)
+
+	// Firebase App + FCM Client başlatma (service account varsa)
+	serviceAccountPath := os.Getenv("GOOGLE_APPLICATION_CREDENTIALS")
+	if serviceAccountPath == "" {
+		serviceAccountPath = "./firebase-service-account.json"
+	}
+	if _, statErr := os.Stat(serviceAccountPath); statErr == nil {
+		fireApp, fireErr := fire.NewApp(ctx, nil, option.WithCredentialsFile(serviceAccountPath))
+		if fireErr != nil {
+			log.Printf("⚠️ Firebase başlatma hatası: %v", fireErr)
+		} else {
+			fcmClient, _ = fireApp.Messaging(ctx)
+			log.Println("🔥 Firebase FCM hazır!")
+		}
+	} else {
+		log.Println("⚠️ firebase-service-account.json bulunamadı. Push bildirimler devre dışı.")
+	}
 
 	// Redis Bağlantısı (Upstash)
 	redisURL := os.Getenv("REDIS_URL")
@@ -257,6 +336,12 @@ func main() {
 			log.Println("Kaydetme hatası:", err)
 			return c.Status(500).JSON(fiber.Map{"error": "Paket kaydedilemedi"})
 		}
+
+		// Push Bildirim: Tüm kullanıcılara yeni paket bildirimi gönder
+		go sendFCMToAll(db,
+			"Yakınında yeni bir paket! 🍱",
+			pkg.Name+" — sadece ₺"+fmt.Sprintf("%.2f", pkg.DiscountedPrice),
+		)
 
 		// Başarılı yanıt dön (201 Created)
 		return c.Status(201).JSON(pkg)
@@ -834,6 +919,94 @@ func main() {
 		}
 
 		return c.Status(200).JSON(orders)
+	})
+
+	// API Rotası 12: İşletme Sipariş Durumunu Güncelle (PATCH)
+	app.Patch("/api/v1/orders/:id/status", func(c *fiber.Ctx) error {
+		orderID := c.Params("id")
+		if orderID == "" {
+			return c.Status(400).JSON(fiber.Map{"error": "Sipariş ID gerekli"})
+		}
+
+		type StatusRequest struct {
+			Status string `json:"status"`
+		}
+		var req StatusRequest
+		if err := c.BodyParser(&req); err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": "Geçersiz istek"})
+		}
+
+		log.Printf("📋 Durum güncelleme isteği: order=%s, yeni_durum='%s' (len=%d)", orderID, req.Status, len(req.Status))
+
+		// İzin verilen durumlar (switch ile — encoding problemi olmaz)
+		switch req.Status {
+		case "Hazırlanıyor", "Teslim Edilmeyi Bekliyor":
+			// geçerli, devam et
+		default:
+			log.Printf("❌ Geçersiz durum reddedildi: '%s'", req.Status)
+			return c.Status(400).JSON(fiber.Map{"error": "Geçersiz durum: " + req.Status})
+		}
+
+		// Mevcut durumu kontrol et (Teslim Edilmiş siparişi geri çevirmeyi engelle)
+		var currentStatus string
+		err := db.QueryRow("SELECT status FROM orders WHERE id = $1", orderID).Scan(&currentStatus)
+		if err != nil {
+			return c.Status(404).JSON(fiber.Map{"error": "Sipariş bulunamadı"})
+		}
+		if currentStatus == "Teslim Edildi" {
+			return c.Status(400).JSON(fiber.Map{"error": "Teslim edilmiş siparişin durumu değiştirilemez"})
+		}
+
+		_, updateErr := db.Exec("UPDATE orders SET status = $1 WHERE id = $2", req.Status, orderID)
+		if updateErr != nil {
+			log.Println("Durum güncelleme hatası:", updateErr)
+			return c.Status(500).JSON(fiber.Map{"error": "Durum güncellenemedi"})
+		}
+
+		// Push Bildirim: Hazır olduysa müşteriye bildir
+		if req.Status == "Teslim Edilmeyi Bekliyor" {
+			var buyerEmail string
+			if err := db.QueryRow("SELECT buyer_email FROM orders WHERE id = $1", orderID).Scan(&buyerEmail); err == nil {
+				go sendFCMToEmail(db, buyerEmail,
+					"Siparişiniz Hazır! 🎉",
+					"QR kodunuzu göstererek teslim alabilirsiniz.",
+				)
+			}
+		} else if req.Status == "Hazırlanıyor" {
+			var buyerEmail string
+			if err := db.QueryRow("SELECT buyer_email FROM orders WHERE id = $1", orderID).Scan(&buyerEmail); err == nil {
+				go sendFCMToEmail(db, buyerEmail,
+					"Siparişiniz Hazırlanıyor 👨‍🍳",
+					"Siparışiniz şu anda hazırlanıyor, kısa sürede hazır olacak!",
+				)
+			}
+		}
+
+		log.Printf("✅ Sipariş durumu güncellendi: %s → %s", orderID, req.Status)
+		return c.JSON(fiber.Map{"message": "Durum güncellendi", "order_id": orderID, "status": req.Status})
+	})
+
+	// API Rotası 13: FCM Token Kayıt (Flutter'dan tek seferlik)
+	app.Post("/api/v1/device-token", func(c *fiber.Ctx) error {
+		type TokenRequest struct {
+			Email    string `json:"email"`
+			FCMToken string `json:"fcm_token"`
+		}
+		var req TokenRequest
+		if err := c.BodyParser(&req); err != nil || req.Email == "" || req.FCMToken == "" {
+			return c.Status(400).JSON(fiber.Map{"error": "email ve fcm_token gerekli"})
+		}
+		_, err := db.Exec(`
+			INSERT INTO device_tokens (user_email, fcm_token, updated_at)
+			VALUES ($1, $2, $3)
+			ON CONFLICT (user_email) DO UPDATE SET fcm_token = EXCLUDED.fcm_token, updated_at = EXCLUDED.updated_at`,
+			req.Email, req.FCMToken, time.Now())
+		if err != nil {
+			log.Println("Token kaydetme hatası:", err)
+			return c.Status(500).JSON(fiber.Map{"error": "Token kaydedilemedi"})
+		}
+		log.Printf("🔔 FCM token kaydedildi: %s", req.Email)
+		return c.JSON(fiber.Map{"message": "Token kaydedildi"})
 	})
 
 	// 5. Sunucuyu Dinlemeye Başla
