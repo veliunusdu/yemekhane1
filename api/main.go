@@ -128,14 +128,48 @@ func main() {
 	}
 	defer db.Close()
 
-	// 2. Tabloyu Otomatik Oluştur (Sadece MVP için tabloyu elle açmamak adına buraya ekliyoruz)
-	createTableQuery := `
-	CREATE TABLE IF NOT EXISTS packages (
-		id UUID PRIMARY KEY,
-		business_id VARCHAR(50),
-		business_name VARCHAR(255) DEFAULT '',
+	// 2. Tabloları Otomatik Oluştur (V2 Mimari)
+
+	// A. Kullanıcılar (Users)
+	db.Exec(`CREATE TABLE IF NOT EXISTS users (
+		id UUID DEFAULT gen_random_uuid(),
+		email VARCHAR(255) PRIMARY KEY,
+		full_name VARCHAR(255),
+		phone_number VARCHAR(50),
+		profile_image_url TEXT,
+		loyalty_points INT DEFAULT 0,
+		preferences JSONB DEFAULT '{}',
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+	);`)
+
+	// B. İşletmeler (Businesses)
+	db.Exec(`CREATE TABLE IF NOT EXISTS businesses (
+		id VARCHAR(255) PRIMARY KEY,
+		owner_email VARCHAR(255),
+		name VARCHAR(255) DEFAULT '',
 		latitude FLOAT DEFAULT 0.0,
 		longitude FLOAT DEFAULT 0.0,
+		address TEXT,
+		is_active BOOLEAN DEFAULT true,
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+	);`)
+
+	// C. İşletme Çalışma Saatleri (Business Hours)
+	db.Exec(`CREATE TABLE IF NOT EXISTS business_hours (
+		id SERIAL PRIMARY KEY,
+		business_id VARCHAR(255),
+		day_of_week INT CHECK (day_of_week >= 0 AND day_of_week <= 6),
+		open_time TIME,
+		close_time TIME,
+		is_closed BOOLEAN DEFAULT false,
+		UNIQUE(business_id, day_of_week)
+	);`)
+
+	// D. Paketler (Packages V2)
+	db.Exec(`CREATE TABLE IF NOT EXISTS packages (
+		id UUID PRIMARY KEY,
+		business_id VARCHAR(255),
 		name VARCHAR(255),
 		description TEXT,
 		original_price DECIMAL(10,2),
@@ -143,46 +177,59 @@ func main() {
 		stock INT,
 		is_active BOOLEAN,
 		image_url TEXT,
-		created_at TIMESTAMP
-	);`
-	if _, err := db.Exec(createTableQuery); err != nil {
-		log.Fatal("Tablo oluşturulamadı:", err)
-	}
-
-	// Mevcut veritabanına konum alanları ekle (safe migration)
-	db.Exec("ALTER TABLE packages ADD COLUMN IF NOT EXISTS business_name VARCHAR(255) DEFAULT '';")
-	db.Exec("ALTER TABLE packages ADD COLUMN IF NOT EXISTS latitude FLOAT DEFAULT 0.0;")
-	db.Exec("ALTER TABLE packages ADD COLUMN IF NOT EXISTS longitude FLOAT DEFAULT 0.0;")
-
-	// İşletme Profil Tablosu (konum kaydı için)
-	db.Exec(`CREATE TABLE IF NOT EXISTS businesses (
-		id VARCHAR(50) PRIMARY KEY,
-		name VARCHAR(255) DEFAULT '',
-		latitude FLOAT DEFAULT 0.0,
-		longitude FLOAT DEFAULT 0.0,
-		updated_at TIMESTAMP
+		category VARCHAR(100) DEFAULT 'Diğer',
+		tags JSONB DEFAULT '[]',
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 	);`)
+	db.Exec("ALTER TABLE packages ADD COLUMN IF NOT EXISTS category VARCHAR(100) DEFAULT 'Diğer';")
+	db.Exec("ALTER TABLE packages ADD COLUMN IF NOT EXISTS tags JSONB DEFAULT '[]';")
 
-	// Siparişler Tablosunu Oluştur
-	createOrderTableQuery := `
-	CREATE TABLE IF NOT EXISTS orders (
+	// E. Siparişler (Orders)
+	db.Exec(`CREATE TABLE IF NOT EXISTS orders (
 		id UUID PRIMARY KEY,
 		package_id UUID,
 		user_id VARCHAR(50),
 		buyer_email VARCHAR(255),
 		status VARCHAR(50),
-		created_at TIMESTAMP
-	);`
-	db.Exec(createOrderTableQuery)
-	// Gelecekteki veya mevcut migration'lar için safe bir ALTER:
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+	);`)
 	db.Exec("ALTER TABLE orders ADD COLUMN IF NOT EXISTS buyer_email VARCHAR(255);")
 	db.Exec("ALTER TABLE orders ALTER COLUMN status TYPE VARCHAR(50);")
 
-	// FCM Token tablosu (Push Notification için)
+	// F. Sipariş Durum Geçmişi (Order Status History)
+	db.Exec(`CREATE TABLE IF NOT EXISTS order_status_history (
+		id SERIAL PRIMARY KEY,
+		order_id UUID,
+		status VARCHAR(50),
+		changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+	);`)
+
+	// G. Değerlendirmeler ve Yorumlar (Reviews)
+	db.Exec(`CREATE TABLE IF NOT EXISTS reviews (
+		id SERIAL PRIMARY KEY,
+		order_id UUID,
+		user_email VARCHAR(255),
+		business_id VARCHAR(255),
+		rating INT CHECK (rating >= 1 AND rating <= 5),
+		comment TEXT,
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+	);`)
+
+	// H. Favori Dükkanlar (Favorite Shops)
+	db.Exec(`CREATE TABLE IF NOT EXISTS favorite_shops (
+		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		user_email VARCHAR(255) NOT NULL,
+		business_id VARCHAR(255),
+		business_name VARCHAR(255),
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		UNIQUE(user_email, business_name)
+	);`)
+
+	// I. FCM Token (Push Notification)
 	db.Exec(`CREATE TABLE IF NOT EXISTS device_tokens (
 		user_email VARCHAR(255) PRIMARY KEY,
 		fcm_token  TEXT NOT NULL,
-		updated_at TIMESTAMP
+		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 	);`)
 
 	// Firebase App + FCM Client başlatma (service account varsa)
@@ -309,6 +356,17 @@ func main() {
 			}
 		}
 
+		category := dto.Category
+		if category == "" {
+			category = "Diğer"
+		}
+
+		tagsJSON := "[]"
+		if len(dto.Tags) > 0 {
+			b, _ := json.Marshal(dto.Tags)
+			tagsJSON = string(b)
+		}
+
 		// Veritabanı modelini (Entity) oluştur
 		pkg := domain.Package{
 			ID:              uuid.New().String(),
@@ -323,15 +381,17 @@ func main() {
 			Stock:           dto.Stock,
 			IsActive:        true,
 			ImageUrl:        dto.ImageUrl,
+			Category:        category,
+			Tags:            json.RawMessage(tagsJSON),
 			CreatedAt:       time.Now(),
 		}
 
-		// Veritabanına Kaydet
+		// V2 Mimarisi İçin Insert:
 		insertQuery := `
-			INSERT INTO packages (id, business_id, business_name, latitude, longitude, name, description, original_price, discounted_price, stock, is_active, created_at, image_url)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`
+			INSERT INTO packages (id, business_id, name, description, original_price, discounted_price, stock, is_active, created_at, image_url, category, tags)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`
 
-		_, err := db.Exec(insertQuery, pkg.ID, pkg.BusinessID, pkg.BusinessName, pkg.Latitude, pkg.Longitude, pkg.Name, pkg.Description, pkg.OriginalPrice, pkg.DiscountedPrice, pkg.Stock, pkg.IsActive, pkg.CreatedAt, pkg.ImageUrl)
+		_, err := db.Exec(insertQuery, pkg.ID, pkg.BusinessID, pkg.Name, pkg.Description, pkg.OriginalPrice, pkg.DiscountedPrice, pkg.Stock, pkg.IsActive, pkg.CreatedAt, pkg.ImageUrl, pkg.Category, tagsJSON)
 		if err != nil {
 			log.Println("Kaydetme hatası:", err)
 			return c.Status(500).JSON(fiber.Map{"error": "Paket kaydedilemedi"})
@@ -367,29 +427,34 @@ func main() {
 				return c.Status(400).JSON(fiber.Map{"error": "Geçersiz konum parametreleri"})
 			}
 
-			// Haversine Formülü — Subquery içinde mesafe hesaplayıp WHERE ile filtrele
-			// Parameterized query (SQL injection'dan korunur, PostgreSQL uyumlu)
+			// Haversine Formülü — packages ve businesses JOIN işlemi
 			query = `
 				SELECT * FROM (
 					SELECT
-						id, business_id, business_name, latitude, longitude, name,
-						description, original_price, discounted_price, stock, is_active, image_url,
+						p.id, p.business_id, b.name as business_name, b.latitude, b.longitude, p.name,
+						p.description, p.original_price, p.discounted_price, p.stock, p.is_active, p.image_url, p.category, p.tags,
 						6371 * acos(
 							LEAST(1.0,
-								COS(RADIANS($1)) * COS(RADIANS(latitude)) *
-								COS(RADIANS(longitude) - RADIANS($2)) +
-								SIN(RADIANS($1)) * SIN(RADIANS(latitude))
+								COS(RADIANS($1)) * COS(RADIANS(b.latitude)) *
+								COS(RADIANS(b.longitude) - RADIANS($2)) +
+								SIN(RADIANS($1)) * SIN(RADIANS(b.latitude))
 							)
 						) AS distance_km
-					FROM packages
-					WHERE is_active = true AND latitude != 0 AND longitude != 0
+					FROM packages p
+					JOIN businesses b ON p.business_id = b.id
+					WHERE p.is_active = true AND b.latitude != 0 AND b.longitude != 0
 				) AS results
 				WHERE results.distance_km <= $3
 				ORDER BY results.distance_km ASC`
 			rows, err = db.Query(query, lat, lon, radius)
 		} else {
 			// Konum yoksa tüm aktif paketleri getir
-			rows, err = db.Query(`SELECT id, business_id, business_name, latitude, longitude, name, description, original_price, discounted_price, stock, is_active, image_url, 0 AS distance_km FROM packages WHERE is_active = true`)
+			query = `
+				SELECT p.id, p.business_id, b.name as business_name, b.latitude, b.longitude, p.name, p.description, p.original_price, p.discounted_price, p.stock, p.is_active, p.image_url, p.category, p.tags, 0 AS distance_km 
+				FROM packages p
+				JOIN businesses b ON p.business_id = b.id
+				WHERE p.is_active = true`
+			rows, err = db.Query(query)
 		}
 
 		if err != nil {
@@ -401,10 +466,16 @@ func main() {
 		packages := []domain.Package{}
 		for rows.Next() {
 			var p domain.Package
-			if err := rows.Scan(&p.ID, &p.BusinessID, &p.BusinessName, &p.Latitude, &p.Longitude, &p.Name, &p.Description, &p.OriginalPrice, &p.DiscountedPrice, &p.Stock, &p.IsActive, &p.ImageUrl, &p.DistanceKm); err != nil {
+			var tagsStr string
+			if err := rows.Scan(&p.ID, &p.BusinessID, &p.BusinessName, &p.Latitude, &p.Longitude, &p.Name, &p.Description, &p.OriginalPrice, &p.DiscountedPrice, &p.Stock, &p.IsActive, &p.ImageUrl, &p.Category, &tagsStr, &p.DistanceKm); err != nil {
 				log.Println("Satır okuma hatası:", err)
 				continue
 			}
+			p.Tags = json.RawMessage(tagsStr)
+
+			// V2 Ortalama Puan (Rating) Subquery
+			db.QueryRow("SELECT COALESCE(AVG(rating), 0) FROM reviews WHERE business_id = $1", p.BusinessID).Scan(&p.Rating)
+
 			packages = append(packages, p)
 		}
 
@@ -442,6 +513,9 @@ func main() {
 		orderID := uuid.New().String()
 		_, err = db.Exec("INSERT INTO orders (id, package_id, user_id, buyer_email, status, created_at) VALUES ($1, $2, $3, $4, $5, $6)",
 			orderID, req.PackageID, "user-456", req.BuyerEmail, "Hazırlanıyor", time.Now())
+
+		// (V2) Durum Geçmişini Kaydet
+		db.Exec("INSERT INTO order_status_history (order_id, status, changed_at) VALUES ($1, $2, $3)", orderID, "Hazırlanıyor", time.Now())
 
 		return c.Status(201).JSON(fiber.Map{"message": "Sipariş başarıyla alındı!", "order_id": orderID})
 	})
@@ -865,6 +939,9 @@ func main() {
 			return c.Status(500).JSON(fiber.Map{"error": "Teslimat onaylanırken sistemsel bir hata oluştu"})
 		}
 
+		// (V2) Sipariş Durum Geçmişini Kaydet
+		db.Exec("INSERT INTO order_status_history (order_id, status, changed_at) VALUES ($1, $2, $3)", req.OrderID, "Teslim Edildi", time.Now())
+
 		log.Printf("✅ Sipariş başarıyla teslim edildi. Sipariş ID: %s", req.OrderID)
 		return c.Status(200).JSON(fiber.Map{"message": "Sipariş başarıyla teslim edildi ✅", "order_id": req.OrderID})
 	})
@@ -963,6 +1040,12 @@ func main() {
 			return c.Status(500).JSON(fiber.Map{"error": "Durum güncellenemedi"})
 		}
 
+		// (V2) Sipariş Durum Geçmişini Kaydet
+		_, histErr := db.Exec("INSERT INTO order_status_history (order_id, status, changed_at) VALUES ($1, $2, $3)", orderID, req.Status, time.Now())
+		if histErr != nil {
+			log.Println("Durum geçmişi kaydetme hatası:", histErr)
+		}
+
 		// Push Bildirim: Hazır olduysa müşteriye bildir
 		if req.Status == "Teslim Edilmeyi Bekliyor" {
 			var buyerEmail string
@@ -1007,6 +1090,488 @@ func main() {
 		}
 		log.Printf("🔔 FCM token kaydedildi: %s", req.Email)
 		return c.JSON(fiber.Map{"message": "Token kaydedildi"})
+	})
+
+	// API Rotası 14: İşletme İstatistikleri (Gelişmiş Raporlama)
+	app.Get("/api/v1/business/stats", func(c *fiber.Ctx) error {
+		// 1. KPI'lar: Toplam Kazanç, Satılan Paket Sayısı
+		var totalRevenue float64
+		var totalSold int
+
+		err := db.QueryRow(`
+			SELECT COALESCE(SUM(p.discounted_price), 0), COUNT(o.id)
+			FROM orders o
+			JOIN packages p ON o.package_id = p.id
+			WHERE o.status = 'Teslim Edildi'
+		`).Scan(&totalRevenue, &totalSold)
+
+		if err != nil {
+			log.Println("KPI sorgu hatası:", err)
+			return c.Status(500).JSON(fiber.Map{"error": "İstatistikler alınamadı"})
+		}
+
+		// Kurtarılan Gıda (her 1 paket = 0.5 kg varsayalım)
+		savedFoodKg := float64(totalSold) * 0.5
+
+		// 2. Haftalık Kazanç Grafiği (Son 7 Gün)
+		// PostgreSQL'de generate_series veya basitçe son 7 günü gruplama
+		rows, err := db.Query(`
+			SELECT TO_CHAR(o.created_at, 'YYYY-MM-DD') as day, SUM(p.discounted_price) as revenue
+			FROM orders o
+			JOIN packages p ON o.package_id = p.id
+			WHERE o.status = 'Teslim Edildi' AND o.created_at >= NOW() - INTERVAL '7 days'
+			GROUP BY day
+			ORDER BY day ASC
+		`)
+		if err != nil {
+			log.Println("Haftalık kazanç sorgu hatası:", err)
+			return c.Status(500).JSON(fiber.Map{"error": "Haftalık kazanç alınamadı"})
+		}
+		defer rows.Close()
+
+		type DailyRevenue struct {
+			Date    string  `json:"date"`
+			Revenue float64 `json:"revenue"`
+		}
+		var weeklyRevenue []DailyRevenue
+		for rows.Next() {
+			var dr DailyRevenue
+			if err := rows.Scan(&dr.Date, &dr.Revenue); err == nil {
+				weeklyRevenue = append(weeklyRevenue, dr)
+			}
+		}
+
+		// 3. En Çok Satılan Paketler (Top 5)
+		topRows, err := db.Query(`
+			SELECT p.name, COUNT(o.id) as sales
+			FROM orders o
+			JOIN packages p ON o.package_id = p.id
+			WHERE o.status = 'Teslim Edildi'
+			GROUP BY p.name
+			ORDER BY sales DESC
+			LIMIT 5
+		`)
+		if err != nil {
+			log.Println("Popüler paket sorgu hatası:", err)
+			return c.Status(500).JSON(fiber.Map{"error": "Popüler paketler alınamadı"})
+		}
+		defer topRows.Close()
+
+		type TopPackage struct {
+			Name  string `json:"name"`
+			Sales int    `json:"sales"`
+		}
+		var topPackages []TopPackage
+		for topRows.Next() {
+			var tp TopPackage
+			if err := topRows.Scan(&tp.Name, &tp.Sales); err == nil {
+				topPackages = append(topPackages, tp)
+			}
+		}
+
+		return c.JSON(fiber.Map{
+			"kpis": fiber.Map{
+				"totalRevenue": totalRevenue,
+				"totalSold":    totalSold,
+				"savedFoodKg":  savedFoodKg,
+			},
+			"weekly_revenue": weeklyRevenue,
+			"top_packages":   topPackages,
+		})
+	})
+
+	// API Rotası 11: Kullanıcının Siparişlerini Çekme (Flutter Siparişlerim UI Kullanır)
+	app.Get("/api/v1/orders/me", func(c *fiber.Ctx) error {
+		// Kullanıcının emailini query param'dan al
+		buyerEmail := c.Query("email")
+		if buyerEmail == "" {
+			return c.Status(400).JSON(fiber.Map{"error": "email parametresi gerekli"})
+		}
+
+		rows, err := db.Query(`
+			SELECT o.id, o.package_id, p.name, o.status, o.created_at, p.business_id 
+			FROM orders o
+			LEFT JOIN packages p ON o.package_id = p.id
+			WHERE o.buyer_email = $1 
+			ORDER BY o.created_at DESC
+		`, buyerEmail)
+
+		if err != nil {
+			log.Println("Siparişleri çekerken hata:", err)
+			return c.Status(500).JSON(fiber.Map{"error": "Siparişler getirilemedi"})
+		}
+		defer rows.Close()
+
+		var orders []map[string]interface{}
+		for rows.Next() {
+			var id, packageID, status string
+			var packageName, businessId sql.NullString
+			var createdAt time.Time
+			if err := rows.Scan(&id, &packageID, &packageName, &status, &createdAt, &businessId); err != nil {
+				continue
+			}
+
+			pkgName := packageID // Fallback: paket silinmişse ID göster
+			if packageName.Valid && packageName.String != "" {
+				pkgName = packageName.String
+			}
+
+			orders = append(orders, map[string]interface{}{
+				"id":           id,
+				"package_id":   packageID,
+				"package_name": pkgName,
+				"status":       status,
+				"created_at":   createdAt,
+				"business_id":  businessId.String,
+			})
+		}
+
+		if orders == nil {
+			orders = []map[string]interface{}{} // null gitmesini önle
+		}
+
+		return c.Status(200).JSON(orders)
+	})
+
+	// API Rotası 12: İşletme Sipariş Durumunu Güncelle (PATCH)
+	app.Patch("/api/v1/orders/:id/status", func(c *fiber.Ctx) error {
+		orderID := c.Params("id")
+		if orderID == "" {
+			return c.Status(400).JSON(fiber.Map{"error": "Sipariş ID gerekli"})
+		}
+
+		type StatusRequest struct {
+			Status string `json:"status"`
+		}
+		var req StatusRequest
+		if err := c.BodyParser(&req); err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": "Geçersiz istek"})
+		}
+
+		log.Printf("📋 Durum güncelleme isteği: order=%s, yeni_durum='%s' (len=%d)", orderID, req.Status, len(req.Status))
+
+		// İzin verilen durumlar (switch ile — encoding problemi olmaz)
+		switch req.Status {
+		case "Hazırlanıyor", "Teslim Edilmeyi Bekliyor":
+			// geçerli, devam et
+		default:
+			log.Printf("❌ Geçersiz durum reddedildi: '%s'", req.Status)
+			return c.Status(400).JSON(fiber.Map{"error": "Geçersiz durum: " + req.Status})
+		}
+
+		// Mevcut durumu kontrol et (Teslim Edilmiş siparişi geri çevirmeyi engelle)
+		var currentStatus string
+		err := db.QueryRow("SELECT status FROM orders WHERE id = $1", orderID).Scan(&currentStatus)
+		if err != nil {
+			return c.Status(404).JSON(fiber.Map{"error": "Sipariş bulunamadı"})
+		}
+		if currentStatus == "Teslim Edildi" {
+			return c.Status(400).JSON(fiber.Map{"error": "Teslim edilmiş siparişin durumu değiştirilemez"})
+		}
+
+		_, updateErr := db.Exec("UPDATE orders SET status = $1 WHERE id = $2", req.Status, orderID)
+		if updateErr != nil {
+			log.Println("Durum güncelleme hatası:", updateErr)
+			return c.Status(500).JSON(fiber.Map{"error": "Durum güncellenemedi"})
+		}
+
+		// (V2) Sipariş Durum Geçmişini Kaydet
+		_, histErr := db.Exec("INSERT INTO order_status_history (order_id, status, changed_at) VALUES ($1, $2, $3)", orderID, req.Status, time.Now())
+		if histErr != nil {
+			log.Println("Durum geçmişi kaydetme hatası:", histErr)
+		}
+
+		// Push Bildirim: Hazır olduysa müşteriye bildir
+		if req.Status == "Teslim Edilmeyi Bekliyor" {
+			var buyerEmail string
+			if err := db.QueryRow("SELECT buyer_email FROM orders WHERE id = $1", orderID).Scan(&buyerEmail); err == nil {
+				go sendFCMToEmail(db, buyerEmail,
+					"Siparişiniz Hazır! 🎉",
+					"QR kodunuzu göstererek teslim alabilirsiniz.",
+				)
+			}
+		} else if req.Status == "Hazırlanıyor" {
+			var buyerEmail string
+			if err := db.QueryRow("SELECT buyer_email FROM orders WHERE id = $1", orderID).Scan(&buyerEmail); err == nil {
+				go sendFCMToEmail(db, buyerEmail,
+					"Siparişiniz Hazırlanıyor 👨‍🍳",
+					"Siparışiniz şu anda hazırlanıyor, kısa sürede hazır olacak!",
+				)
+			}
+		}
+
+		log.Printf("✅ Sipariş durumu güncellendi: %s → %s", orderID, req.Status)
+		return c.JSON(fiber.Map{"message": "Durum güncellendi", "order_id": orderID, "status": req.Status})
+	})
+
+	// API Rotası 13: FCM Token Kayıt (Flutter'dan tek seferlik)
+	app.Post("/api/v1/device-token", func(c *fiber.Ctx) error {
+		type TokenRequest struct {
+			Email    string `json:"email"`
+			FCMToken string `json:"fcm_token"`
+		}
+		var req TokenRequest
+		if err := c.BodyParser(&req); err != nil || req.Email == "" || req.FCMToken == "" {
+			return c.Status(400).JSON(fiber.Map{"error": "email ve fcm_token gerekli"})
+		}
+		_, err := db.Exec(`
+			INSERT INTO device_tokens (user_email, fcm_token, updated_at)
+			VALUES ($1, $2, $3)
+			ON CONFLICT (user_email) DO UPDATE SET fcm_token = EXCLUDED.fcm_token, updated_at = EXCLUDED.updated_at`,
+			req.Email, req.FCMToken, time.Now())
+		if err != nil {
+			log.Println("Token kaydetme hatası:", err)
+			return c.Status(500).JSON(fiber.Map{"error": "Token kaydedilemedi"})
+		}
+		log.Printf("🔔 FCM token kaydedildi: %s", req.Email)
+		return c.JSON(fiber.Map{"message": "Token kaydedildi"})
+	})
+
+	// API Rotası 14: İşletme İstatistikleri (Gelişmiş Raporlama)
+	app.Get("/api/v1/business/stats", func(c *fiber.Ctx) error {
+		// 1. KPI'lar: Toplam Kazanç, Satılan Paket Sayısı
+		var totalRevenue float64
+		var totalSold int
+
+		err := db.QueryRow(`
+			SELECT COALESCE(SUM(p.discounted_price), 0), COUNT(o.id)
+			FROM orders o
+			JOIN packages p ON o.package_id = p.id
+			WHERE o.status = 'Teslim Edildi'
+		`).Scan(&totalRevenue, &totalSold)
+
+		if err != nil {
+			log.Println("KPI sorgu hatası:", err)
+			return c.Status(500).JSON(fiber.Map{"error": "İstatistikler alınamadı"})
+		}
+
+		// Kurtarılan Gıda (her 1 paket = 0.5 kg varsayalım)
+		savedFoodKg := float64(totalSold) * 0.5
+
+		// 2. Haftalık Kazanç Grafiği (Son 7 Gün)
+		// PostgreSQL'de generate_series veya basitçe son 7 günü gruplama
+		rows, err := db.Query(`
+			SELECT TO_CHAR(o.created_at, 'YYYY-MM-DD') as day, SUM(p.discounted_price) as revenue
+			FROM orders o
+			JOIN packages p ON o.package_id = p.id
+			WHERE o.status = 'Teslim Edildi' AND o.created_at >= NOW() - INTERVAL '7 days'
+			GROUP BY day
+			ORDER BY day ASC
+		`)
+		if err != nil {
+			log.Println("Haftalık kazanç sorgu hatası:", err)
+			return c.Status(500).JSON(fiber.Map{"error": "Haftalık kazanç alınamadı"})
+		}
+		defer rows.Close()
+
+		type DailyRevenue struct {
+			Date    string  `json:"date"`
+			Revenue float64 `json:"revenue"`
+		}
+		var weeklyRevenue []DailyRevenue
+		for rows.Next() {
+			var dr DailyRevenue
+			if err := rows.Scan(&dr.Date, &dr.Revenue); err == nil {
+				weeklyRevenue = append(weeklyRevenue, dr)
+			}
+		}
+
+		// 3. En Çok Satılan Paketler (Top 5)
+		topRows, err := db.Query(`
+			SELECT p.name, COUNT(o.id) as sales
+			FROM orders o
+			JOIN packages p ON o.package_id = p.id
+			WHERE o.status = 'Teslim Edildi'
+			GROUP BY p.name
+			ORDER BY sales DESC
+			LIMIT 5
+		`)
+		if err != nil {
+			log.Println("Popüler paket sorgu hatası:", err)
+			return c.Status(500).JSON(fiber.Map{"error": "Popüler paketler alınamadı"})
+		}
+		defer topRows.Close()
+
+		type TopPackage struct {
+			Name  string `json:"name"`
+			Sales int    `json:"sales"`
+		}
+		var topPackages []TopPackage
+		for topRows.Next() {
+			var tp TopPackage
+			if err := topRows.Scan(&tp.Name, &tp.Sales); err == nil {
+				topPackages = append(topPackages, tp)
+			}
+		}
+
+		return c.JSON(fiber.Map{
+			"kpis": fiber.Map{
+				"totalRevenue": totalRevenue,
+				"totalSold":    totalSold,
+				"savedFoodKg":  savedFoodKg,
+			},
+			"weekly_revenue": weeklyRevenue,
+			"top_packages":   topPackages,
+		})
+	})
+
+	// API Rotası 15: Yorum ve Puan (Reviews) Ekleme
+	app.Post("/api/v1/reviews", func(c *fiber.Ctx) error {
+		type ReviewRequest struct {
+			OrderID    string `json:"order_id"`
+			UserEmail  string `json:"user_email"`
+			BusinessID string `json:"business_id"`
+			Rating     int    `json:"rating"`
+			Comment    string `json:"comment"`
+		}
+		var req ReviewRequest
+		if err := c.BodyParser(&req); err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": "Geçersiz İstek"})
+		}
+
+		_, err := db.Exec(`INSERT INTO reviews (order_id, user_email, business_id, rating, comment, created_at) 
+			VALUES ($1, $2, $3, $4, $5, $6)`, req.OrderID, req.UserEmail, req.BusinessID, req.Rating, req.Comment, time.Now())
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Değerlendirme gönderilemedi"})
+		}
+		return c.Status(201).JSON(fiber.Map{"message": "Değerlendirme başarıyla alındı!"})
+	})
+
+	// API Rotası 16: Favori Dükkanlara Ekle
+	app.Post("/api/v1/favorites", func(c *fiber.Ctx) error {
+		type FavReq struct {
+			UserEmail    string `json:"user_email"`
+			BusinessID   string `json:"business_id"`
+			BusinessName string `json:"business_name"`
+		}
+		var req FavReq
+		if err := c.BodyParser(&req); err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": "Geçersiz İstek"})
+		}
+		_, err := db.Exec(`INSERT INTO favorite_shops (user_email, business_id, business_name, created_at) 
+			VALUES ($1, $2, $3, $4)`, req.UserEmail, req.BusinessID, req.BusinessName, time.Now())
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Favorilere eklenirken hata"})
+		}
+		return c.Status(201).JSON(fiber.Map{"message": "Favorilere eklendi"})
+	})
+
+	// API Rotası 17: Favori Dükkanlardan Çıkar
+	app.Delete("/api/v1/favorites", func(c *fiber.Ctx) error {
+		type FavReq struct {
+			UserEmail    string `json:"user_email"`
+			BusinessName string `json:"business_name"`
+		}
+		var req FavReq
+		if err := c.BodyParser(&req); err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": "Geçersiz İstek"})
+		}
+		_, err := db.Exec(`DELETE FROM favorite_shops WHERE user_email=$1 AND business_name=$2`, req.UserEmail, req.BusinessName)
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Favorilerden çıkarılamadı"})
+		}
+		return c.Status(200).JSON(fiber.Map{"message": "Favorilerden çıkarıldı"})
+	})
+
+	// API Rotası 18: Kullanıcının Favorilerini Getir
+	app.Get("/api/v1/favorites", func(c *fiber.Ctx) error {
+		email := c.Query("email")
+		if email == "" {
+			return c.Status(400).JSON(fiber.Map{"error": "email parametresi gerekli"})
+		}
+		rows, err := db.Query("SELECT business_id, business_name FROM favorite_shops WHERE user_email=$1", email)
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Favoriler çekilemedi"})
+		}
+		defer rows.Close()
+
+		favs := []map[string]string{}
+		for rows.Next() {
+			var bId, bName sql.NullString
+			if err := rows.Scan(&bId, &bName); err == nil {
+				favs = append(favs, map[string]string{
+					"business_id":   bId.String,
+					"business_name": bName.String,
+				})
+			}
+		}
+		if favs == nil {
+			favs = []map[string]string{}
+		}
+		return c.JSON(favs)
+	})
+
+	// API Rotası 19: İşletmenin Aldığı Yorumlar (Reviews)
+	app.Get("/api/v1/business/reviews", func(c *fiber.Ctx) error {
+		rows, err := db.Query(`
+			SELECT r.id, r.order_id, r.user_email, r.rating, r.comment, r.created_at
+			FROM reviews r
+			WHERE r.business_id = 'business-123'
+			ORDER BY r.created_at DESC
+		`)
+		if err != nil {
+			log.Println("Reviews sorgu hatası:", err)
+			return c.Status(500).JSON(fiber.Map{"error": "Değerlendirmeler getirilemedi"})
+		}
+		defer rows.Close()
+
+		type Review struct {
+			ID        int       `json:"id"`
+			OrderID   string    `json:"order_id"`
+			UserEmail string    `json:"user_email"`
+			Rating    int       `json:"rating"`
+			Comment   string    `json:"comment"`
+			CreatedAt time.Time `json:"created_at"`
+		}
+
+		reviews := []Review{}
+		for rows.Next() {
+			var r Review
+			var comment sql.NullString
+			if err := rows.Scan(&r.ID, &r.OrderID, &r.UserEmail, &r.Rating, &comment, &r.CreatedAt); err != nil {
+				continue
+			}
+			if comment.Valid {
+				r.Comment = comment.String
+			}
+			reviews = append(reviews, r)
+		}
+
+		// Ortalama puan hesapla
+		var avgRating float64
+		db.QueryRow("SELECT COALESCE(AVG(rating), 0) FROM reviews WHERE business_id = 'business-123'").Scan(&avgRating)
+
+		return c.JSON(fiber.Map{
+			"reviews":    reviews,
+			"avg_rating": avgRating,
+			"count":      len(reviews),
+		})
+	})
+
+	// API Rotası 20: Kullanıcı Profili (Sadakat Puanı vs.)
+	app.Get("/api/v1/users/profile", func(c *fiber.Ctx) error {
+		email := c.Query("email")
+		if email == "" {
+			return c.Status(400).JSON(fiber.Map{"error": "email parametresi gerekli"})
+		}
+		var fullName, phone string
+		var loyalty int
+		err := db.QueryRow("SELECT full_name, phone_number, loyalty_points FROM users WHERE email = $1", email).Scan(&fullName, &phone, &loyalty)
+		if err != nil {
+			// Kullanıcı yoksa oluştur (Upsert mekanizmasına alternatif) veya hata dön
+			return c.JSON(fiber.Map{
+				"email":          email,
+				"full_name":      "",
+				"phone_number":   "",
+				"loyalty_points": 0,
+			})
+		}
+		return c.JSON(fiber.Map{
+			"email":          email,
+			"full_name":      fullName,
+			"phone_number":   phone,
+			"loyalty_points": loyalty,
+		})
 	})
 
 	// 5. Sunucuyu Dinlemeye Başla
