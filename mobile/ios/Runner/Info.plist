@@ -45,5 +45,9 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Yakınındaki yemek paketlerini haritada görmek için konumuna ihtiyacımız var.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Yakınındaki yemek paketlerini haritada görmek için konumuna ihtiyacımız var.</string>
 </dict>
 </plist>

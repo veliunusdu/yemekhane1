@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	iyzipay "github.com/JspBack/iyzipay-go"
@@ -78,6 +79,9 @@ func main() {
 	CREATE TABLE IF NOT EXISTS packages (
 		id UUID PRIMARY KEY,
 		business_id VARCHAR(50),
+		business_name VARCHAR(255) DEFAULT '',
+		latitude FLOAT DEFAULT 0.0,
+		longitude FLOAT DEFAULT 0.0,
 		name VARCHAR(255),
 		description TEXT,
 		original_price DECIMAL(10,2),
@@ -90,6 +94,20 @@ func main() {
 	if _, err := db.Exec(createTableQuery); err != nil {
 		log.Fatal("Tablo oluşturulamadı:", err)
 	}
+
+	// Mevcut veritabanına konum alanları ekle (safe migration)
+	db.Exec("ALTER TABLE packages ADD COLUMN IF NOT EXISTS business_name VARCHAR(255) DEFAULT '';")
+	db.Exec("ALTER TABLE packages ADD COLUMN IF NOT EXISTS latitude FLOAT DEFAULT 0.0;")
+	db.Exec("ALTER TABLE packages ADD COLUMN IF NOT EXISTS longitude FLOAT DEFAULT 0.0;")
+
+	// İşletme Profil Tablosu (konum kaydı için)
+	db.Exec(`CREATE TABLE IF NOT EXISTS businesses (
+		id VARCHAR(50) PRIMARY KEY,
+		name VARCHAR(255) DEFAULT '',
+		latitude FLOAT DEFAULT 0.0,
+		longitude FLOAT DEFAULT 0.0,
+		updated_at TIMESTAMP
+	);`)
 
 	// Siparişler Tablosunu Oluştur
 	createOrderTableQuery := `
@@ -141,6 +159,50 @@ func main() {
 		AllowHeaders: "Origin, Content-Type, Accept, Authorization",
 	}))
 
+	// API Rotası: İşletme Konumunu Kaydet/Güncelle
+	app.Post("/api/v1/business/location", func(c *fiber.Ctx) error {
+		type LocationRequest struct {
+			Name      string  `json:"name"`
+			Latitude  float64 `json:"latitude"`
+			Longitude float64 `json:"longitude"`
+		}
+		var req LocationRequest
+		if err := c.BodyParser(&req); err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": "Geçersiz veri"})
+		}
+		if req.Latitude == 0 || req.Longitude == 0 {
+			return c.Status(400).JSON(fiber.Map{"error": "Geçerli koordinat gerekli"})
+		}
+
+		_, err := db.Exec(`
+			INSERT INTO businesses (id, name, latitude, longitude, updated_at)
+			VALUES ($1, $2, $3, $4, $5)
+			ON CONFLICT (id) DO UPDATE SET
+				name = EXCLUDED.name,
+				latitude = EXCLUDED.latitude,
+				longitude = EXCLUDED.longitude,
+				updated_at = EXCLUDED.updated_at`,
+			"business-123", req.Name, req.Latitude, req.Longitude, time.Now())
+		if err != nil {
+			log.Println("Konum kaydetme hatası:", err)
+			return c.Status(500).JSON(fiber.Map{"error": "Konum kaydedilemedi"})
+		}
+		log.Printf("📍 İşletme konumu güncellendi: %.6f, %.6f", req.Latitude, req.Longitude)
+		return c.JSON(fiber.Map{"message": "Konum kaydedildi ✅", "latitude": req.Latitude, "longitude": req.Longitude})
+	})
+
+	// API Rotası: İşletmenin Kayıtlı Konumunu Çek
+	app.Get("/api/v1/business/location", func(c *fiber.Ctx) error {
+		var name string
+		var lat, lon float64
+		err := db.QueryRow(`SELECT name, latitude, longitude FROM businesses WHERE id = $1`, "business-123").Scan(&name, &lat, &lon)
+		if err != nil {
+			// Kayıt yoksa boş dön (henüz kaydedilmemiş)
+			return c.JSON(fiber.Map{"name": "", "latitude": 0, "longitude": 0})
+		}
+		return c.JSON(fiber.Map{"name": name, "latitude": lat, "longitude": lon})
+	})
+
 	// 4. API Rotasını Tanımla (İşletme Paket Ekler)
 	app.Post("/api/v1/business/packages", func(c *fiber.Ctx) error {
 		var dto domain.CreatePackageDTO
@@ -152,10 +214,29 @@ func main() {
 
 		log.Printf("📦 Yeni Paket Geldi: %+v\n", dto)
 
+		// Koordinat verilmemişse işletmenin kayıtlı konumunu kullan
+		if dto.Latitude == 0 || dto.Longitude == 0 {
+			var bizLat, bizLon float64
+			var bizName string
+			dbErr := db.QueryRow(`SELECT name, latitude, longitude FROM businesses WHERE id = $1`, "business-123").
+				Scan(&bizName, &bizLat, &bizLon)
+			if dbErr == nil && (bizLat != 0 || bizLon != 0) {
+				dto.Latitude = bizLat
+				dto.Longitude = bizLon
+				if dto.BusinessName == "" {
+					dto.BusinessName = bizName
+				}
+				log.Printf("📍 Koordinat eksik, işletme konumu kullanıldı: %.6f, %.6f", bizLat, bizLon)
+			}
+		}
+
 		// Veritabanı modelini (Entity) oluştur
 		pkg := domain.Package{
 			ID:              uuid.New().String(),
 			BusinessID:      "business-123", // Şimdilik MVP için sabit bir işletme hesabı
+			BusinessName:    dto.BusinessName,
+			Latitude:        dto.Latitude,
+			Longitude:       dto.Longitude,
 			Name:            dto.Name,
 			Description:     dto.Description,
 			OriginalPrice:   dto.OriginalPrice,
@@ -168,10 +249,10 @@ func main() {
 
 		// Veritabanına Kaydet
 		insertQuery := `
-			INSERT INTO packages (id, business_id, name, description, original_price, discounted_price, stock, is_active, created_at, image_url)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`
+			INSERT INTO packages (id, business_id, business_name, latitude, longitude, name, description, original_price, discounted_price, stock, is_active, created_at, image_url)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`
 
-		_, err := db.Exec(insertQuery, pkg.ID, pkg.BusinessID, pkg.Name, pkg.Description, pkg.OriginalPrice, pkg.DiscountedPrice, pkg.Stock, pkg.IsActive, pkg.CreatedAt, pkg.ImageUrl)
+		_, err := db.Exec(insertQuery, pkg.ID, pkg.BusinessID, pkg.BusinessName, pkg.Latitude, pkg.Longitude, pkg.Name, pkg.Description, pkg.OriginalPrice, pkg.DiscountedPrice, pkg.Stock, pkg.IsActive, pkg.CreatedAt, pkg.ImageUrl)
 		if err != nil {
 			log.Println("Kaydetme hatası:", err)
 			return c.Status(500).JSON(fiber.Map{"error": "Paket kaydedilemedi"})
@@ -181,10 +262,53 @@ func main() {
 		return c.Status(201).JSON(pkg)
 	})
 
-	// API Rotası 2: Tüm Aktif Paketleri Listele (Kullanıcılar İçin)
+	// API Rotası 2: Tüm Aktif Paketleri Listele (Kullanıcılar İçin - Konum Bazlı Filtrelenebilir)
 	app.Get("/api/v1/packages", func(c *fiber.Ctx) error {
-		rows, err := db.Query("SELECT id, business_id, name, description, original_price, discounted_price, stock, is_active, image_url FROM packages WHERE is_active = true")
+		// Konum parametrelerini al
+		latStr := c.Query("lat")
+		lonStr := c.Query("lon")
+		radiusStr := c.Query("radius", "10") // Varsayılan 10 km
+
+		var query string
+		var rows *sql.Rows
+		var err error
+
+		if latStr != "" && lonStr != "" {
+			// Konum varsa Haversine formülü ile hesapla ve filtrele
+			lat, errLat := strconv.ParseFloat(latStr, 64)
+			lon, errLon := strconv.ParseFloat(lonStr, 64)
+			radius, errR := strconv.ParseFloat(radiusStr, 64)
+			if errLat != nil || errLon != nil || errR != nil {
+				return c.Status(400).JSON(fiber.Map{"error": "Geçersiz konum parametreleri"})
+			}
+
+			// Haversine Formülü — Subquery içinde mesafe hesaplayıp WHERE ile filtrele
+			// Parameterized query (SQL injection'dan korunur, PostgreSQL uyumlu)
+			query = `
+				SELECT * FROM (
+					SELECT
+						id, business_id, business_name, latitude, longitude, name,
+						description, original_price, discounted_price, stock, is_active, image_url,
+						6371 * acos(
+							LEAST(1.0,
+								COS(RADIANS($1)) * COS(RADIANS(latitude)) *
+								COS(RADIANS(longitude) - RADIANS($2)) +
+								SIN(RADIANS($1)) * SIN(RADIANS(latitude))
+							)
+						) AS distance_km
+					FROM packages
+					WHERE is_active = true AND latitude != 0 AND longitude != 0
+				) AS results
+				WHERE results.distance_km <= $3
+				ORDER BY results.distance_km ASC`
+			rows, err = db.Query(query, lat, lon, radius)
+		} else {
+			// Konum yoksa tüm aktif paketleri getir
+			rows, err = db.Query(`SELECT id, business_id, business_name, latitude, longitude, name, description, original_price, discounted_price, stock, is_active, image_url, 0 AS distance_km FROM packages WHERE is_active = true`)
+		}
+
 		if err != nil {
+			log.Println("Paket sorgulama hatası:", err)
 			return c.Status(500).JSON(fiber.Map{"error": "Paketler getirilemedi"})
 		}
 		defer rows.Close()
@@ -192,7 +316,8 @@ func main() {
 		packages := []domain.Package{}
 		for rows.Next() {
 			var p domain.Package
-			if err := rows.Scan(&p.ID, &p.BusinessID, &p.Name, &p.Description, &p.OriginalPrice, &p.DiscountedPrice, &p.Stock, &p.IsActive, &p.ImageUrl); err != nil {
+			if err := rows.Scan(&p.ID, &p.BusinessID, &p.BusinessName, &p.Latitude, &p.Longitude, &p.Name, &p.Description, &p.OriginalPrice, &p.DiscountedPrice, &p.Stock, &p.IsActive, &p.ImageUrl, &p.DistanceKm); err != nil {
+				log.Println("Satır okuma hatası:", err)
 				continue
 			}
 			packages = append(packages, p)

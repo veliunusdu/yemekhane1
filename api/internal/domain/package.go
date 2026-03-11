@@ -8,6 +8,9 @@ import (
 type Package struct {
 	ID              string    `json:"id"`
 	BusinessID      string    `json:"business_id"`
+	BusinessName    string    `json:"business_name"`    // Dükkan/Restoran Adı
+	Latitude        float64   `json:"latitude"`         // Enlem
+	Longitude       float64   `json:"longitude"`        // Boylam
 	Name            string    `json:"name"`             // Örn: "3'lü Karışık Poğaça"
 	Description     string    `json:"description"`      // Örn: "Sabah üretiminden taze poğaçalar"
 	OriginalPrice   float64   `json:"original_price"`   // Örn: 150.00
@@ -16,6 +19,7 @@ type Package struct {
 	IsActive        bool      `json:"is_active"`
 	ImageUrl        string    `json:"image_url"`
 	CreatedAt       time.Time `json:"created_at"`
+	DistanceKm      float64   `json:"distance_km,omitempty"` // Hesaplanan mesafe (isteğe bağlı)
 }
 
 // CreatePackageDTO, işletme web üzerinden paket eklerken API'ye gelecek veridir.
@@ -26,4 +30,7 @@ type CreatePackageDTO struct {
 	DiscountedPrice float64 `json:"discounted_price"`
 	Stock           int     `json:"stock"`
 	ImageUrl        string  `json:"image_url"`
+	BusinessName    string  `json:"business_name"` // Dükkan/Restoran Adı
+	Latitude        float64 `json:"latitude"`      // Enlem
+	Longitude       float64 `json:"longitude"`     // Boylam
 }
