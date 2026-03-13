@@ -1,0 +1,17 @@
+▲ Next.js 16.1.6 (Turbopack)
+- Local:         http://localhost:3000
+- Network:       http://10.203.19.39:3000
+- Environments: .env.local
+
+✓ Starting...
+⚠ The "middleware" file convention is deprecated. Please use "proxy" instead. Learn more: https://nextjs.org/docs/messages/middleware-to-proxy
+✓ Ready in 906ms
+
+-----
+FATAL: An unexpected Turbopack error occurred. A panic log has been written to C:\Users\veliu\AppData\Local\Temp\next-panic-b2ff3fb5214bd205e4de8c3d10d4a55b.log.
+
+To help make Turbopack better, report this error by clicking here.
+-----
+
+ GET /login 500 in 337ms (compile: 171ms, proxy.ts: 55ms, render: 110ms)
+

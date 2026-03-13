@@ -2,7 +2,9 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../api_config.dart';
+import 'business_detail_screen.dart';
 
 class FavoritesScreen extends StatefulWidget {
   const FavoritesScreen({super.key});
@@ -23,8 +25,11 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
   }
 
   Future<void> _loadAndFetch() async {
-    final prefs = await SharedPreferences.getInstance();
-    userEmail = prefs.getString('user_email');
+    userEmail = Supabase.instance.client.auth.currentSession?.user.email;
+    if (userEmail == null || userEmail!.isEmpty) {
+      final prefs = await SharedPreferences.getInstance();
+      userEmail = prefs.getString('user_email');
+    }
     await _fetchFavorites();
   }
 
@@ -37,6 +42,7 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
     try {
       final res = await http.get(
         Uri.parse('$apiBaseUrl/api/v1/favorites?email=$userEmail'),
+        headers: await authHeaders(),
       );
       if (res.statusCode == 200) {
         setState(() {
@@ -59,7 +65,7 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
     try {
       final res = await http.delete(
         Uri.parse('$apiBaseUrl/api/v1/favorites'),
-        headers: {'Content-Type': 'application/json'},
+        headers: await authHeaders(),
         body: json.encode({'user_email': userEmail, 'business_name': businessName}),
       );
       if (res.statusCode != 200 && mounted) {
@@ -151,6 +157,14 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
                             return _FavoriteCard(
                               businessName: fav['business_name'] ?? 'Bilinmeyen',
                               onRemove: () => _removeFavorite(fav['business_name']),
+                              onTap: () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => BusinessDetailScreen(business: fav),
+                                  ),
+                                );
+                              },
                             );
                           },
                         ),
@@ -203,72 +217,80 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
 class _FavoriteCard extends StatelessWidget {
   final String businessName;
   final VoidCallback onRemove;
+  final VoidCallback onTap;
 
-  const _FavoriteCard({required this.businessName, required this.onRemove});
+  const _FavoriteCard({
+    required this.businessName,
+    required this.onRemove,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFFF1F5F9)),
-        boxShadow: [
-          BoxShadow(
-            color: const Color(0xFF0F172A).withOpacity(0.04),
-            blurRadius: 12,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-        child: Row(
-          children: [
-            // Avatar
-            Container(
-              width: 44,
-              height: 44,
-              decoration: BoxDecoration(
-                color: const Color(0xFFFFF7ED),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: const Icon(
-                Icons.store_rounded,
-                color: Color(0xFFF97316),
-                size: 22,
-              ),
-            ),
-            const SizedBox(width: 14),
-            // Name
-            Expanded(
-              child: Text(
-                businessName,
-                style: const TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w600,
-                  color: Color(0xFF1E293B),
-                ),
-              ),
-            ),
-            // Remove button
-            GestureDetector(
-              onTap: onRemove,
-              child: Container(
-                width: 36,
-                height: 36,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFFFF1F2),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: const Icon(
-                  Icons.favorite_rounded,
-                  color: Color(0xFFF43F5E),
-                  size: 18,
-                ),
-              ),
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: const Color(0xFFF1F5F9)),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFF0F172A).withOpacity(0.04),
+              blurRadius: 12,
+              offset: const Offset(0, 2),
             ),
           ],
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          child: Row(
+            children: [
+              // Avatar
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFF7ED),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(
+                  Icons.store_rounded,
+                  color: Color(0xFFF97316),
+                  size: 22,
+                ),
+              ),
+              const SizedBox(width: 14),
+              // Name
+              Expanded(
+                child: Text(
+                  businessName,
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF1E293B),
+                  ),
+                ),
+              ),
+              // Remove button
+              GestureDetector(
+                onTap: (onRemove),
+                child: Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFFF1F2),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Icon(
+                    Icons.favorite_rounded,
+                    color: Color(0xFFF43F5E),
+                    size: 18,
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

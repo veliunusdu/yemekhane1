@@ -6,7 +6,6 @@ import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../api_config.dart';
-import '../screens/payment_page.dart';
 
 const _ink    = Color(0xFF0F172A);
 const _muted  = Color(0xFF94A3B8);
@@ -333,9 +332,10 @@ class _PackageBottomSheetState extends State<_PackageBottomSheet> {
         'business_id': widget.pkg['business_id'],
         'business_name': widget.pkg['business_name'] ?? 'Mekan',
       });
+      final headers = await authHeaders();
       final res = prev
-          ? await http.delete(url, headers: {'Content-Type': 'application/json'}, body: body)
-          : await http.post(url,   headers: {'Content-Type': 'application/json'}, body: body);
+          ? await http.delete(url, headers: headers, body: body)
+          : await http.post(url,   headers: headers, body: body);
       if ((res.statusCode != 200 && res.statusCode != 201) && mounted) {
         setState(() => isFavorite = prev);
       }
@@ -347,37 +347,34 @@ class _PackageBottomSheetState extends State<_PackageBottomSheet> {
     setState(() => isBuying = true);
     try {
       final res = await http.post(
-        Uri.parse('$apiBaseUrl/api/v1/payments/initialize'),
-        headers: {'Content-Type': 'application/json'},
+        Uri.parse('$apiBaseUrl/api/v1/orders'),
+        headers: await authHeaders(),
         body: json.encode({
           'package_id': widget.pkg['id'],
-          'price': widget.pkg['discounted_price'].toString(),
-          'email': widget.userEmail ?? 'bilinmeyen@kullanici.com',
-          'name': 'Kullanici',
-          'surname': 'Siparisci',
+          'buyer_email': widget.userEmail ?? '',
         }),
       );
-      if (res.statusCode == 200 && mounted) {
-        final data = json.decode(res.body);
-        final paymentUrl = (data['paymentPageUrl'] as String?)?.trim();
-        if (paymentUrl != null && paymentUrl.isNotEmpty) {
-          Navigator.pop(context);
-          final result = await Navigator.push<bool>(
-            context,
-            MaterialPageRoute(builder: (_) => PaymentPage(paymentUrl: paymentUrl)),
-          );
-          if (result == true) widget.onPurchaseSuccess();
-        }
-      } else if (mounted) {
+      if (!mounted) return;
+      if (res.statusCode == 201) {
+        Navigator.pop(context);
+        widget.onPurchaseSuccess();
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Ödeme başlatılamadı!')),
+          const SnackBar(
+            content: Text('Siparişiniz alındı! Ödemeyi teslimatta yapabilirsiniz. 🎉'),
+            backgroundColor: Colors.green,
+            behavior: SnackBarBehavior.floating,
+          ),
         );
+      } else {
+        String errMsg = 'Sipariş oluşturulamadı (${res.statusCode})';
+        try { final d = json.decode(res.body); errMsg = d['error'] ?? errMsg; } catch (_) {}
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(errMsg)));
       }
-    } catch (_) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Bağlantı hatası!')),
-      );
-    } finally { if (mounted) setState(() => isBuying = false); }
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Bağlantı hatası: $e')));
+    } finally {
+      if (mounted) setState(() => isBuying = false);
+    }
   }
 
   @override

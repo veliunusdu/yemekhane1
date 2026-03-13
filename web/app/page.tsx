@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { supabase } from "../lib/supabaseClient";
 import {
@@ -11,26 +12,29 @@ import {
 import {
   TrendingUp, Package, Leaf, Activity, Star,
   RefreshCw, Bell, MapPin, ChevronDown, ChevronUp,
-  Plus, ShoppingBag, BarChart2, MessageCircle,
+  Plus, ShoppingBag, BarChart2, MessageCircle, Store,
 } from "lucide-react";
 
 const API_URL = "http://localhost:3001";
 
 type Order = { id: string; package_name: string; buyer_email: string; status: string; created_at: string };
 type Review = { id: number; order_id: string; user_email: string; rating: number; comment: string; created_at: string };
-type Tab = "orders" | "stats" | "reviews";
+type Tab = "orders" | "stats" | "reviews" | "business";
+type MyPkg = { id: string; name: string; description: string; original_price: number; discounted_price: number; stock: number; is_active: boolean; image_url: string; category: string; created_at: string };
 
 const TABS: { id: Tab; label: string; Icon: React.ElementType }[] = [
-  { id: "orders",  label: "Siparişler",    Icon: ShoppingBag },
-  { id: "stats",   label: "İstatistikler", Icon: BarChart2 },
-  { id: "reviews", label: "Yorumlar",      Icon: MessageCircle },
+  { id: "orders",   label: "Siparişler",    Icon: ShoppingBag },
+  { id: "stats",    label: "İstatistikler", Icon: BarChart2 },
+  { id: "reviews",  label: "Yorumlar",      Icon: MessageCircle },
+  { id: "business", label: "İşletme",       Icon: Store },
 ];
 
 const STATUS: Record<string, { dot: string; badge: string }> = {
-  "Ödendi":                   { dot: "bg-emerald-500", badge: "bg-emerald-50 text-emerald-700" },
+  "Sipariş Alındı":                   { dot: "bg-emerald-500", badge: "bg-emerald-50 text-emerald-700" },
   "Hazırlanıyor":             { dot: "bg-orange-500",  badge: "bg-orange-50 text-orange-700"  },
   "Teslim Edilmeyi Bekliyor": { dot: "bg-violet-500",  badge: "bg-violet-50 text-violet-700"  },
   "Teslim Edildi":            { dot: "bg-gray-300",    badge: "bg-gray-100 text-gray-400"     },
+  "\u0130ptal Edildi":            { dot: "bg-red-400",     badge: "bg-red-50 text-red-600"        },
 };
 
 const INPUT = "w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-orange-400 focus:bg-white transition-colors";
@@ -38,7 +42,11 @@ const CARD  = "bg-white rounded-2xl border border-gray-100 p-5";
 
 // ─────────────────────── COMPONENT ───────────────────────
 export default function Home() {
-  const [formData, setFormData] = useState({ name:"", description:"", original_price:"", discounted_price:"", stock:"", category:"", tags:"" });
+  const router = useRouter();
+  const [authChecked, setAuthChecked] = useState(false);
+  const [userEmail, setUserEmail] = useState("");
+
+  const [formData, setFormData] = useState({ name:"", description:"", original_price:"", discounted_price:"", stock:"", category:"", tags:"", available_from:"", available_until:"" });
   const [submitStatus, setSubmitStatus] = useState("");
   const [orders,  setOrders]  = useState<Order[]>([]);
   const [imageUrl, setImageUrl] = useState("");
@@ -62,6 +70,17 @@ export default function Home() {
   const [isLocating, setIsLocating]   = useState(false);
   const [isSavingLoc, setIsSavingLoc] = useState(false);
   const [locExpanded, setLocExpanded] = useState(false);
+
+  const [bizInfo, setBizInfo] = useState({ name:"", address:"", phone:"", email:"", description:"", logo_url:"", category:"", website:"" });
+  const [bizInfoLoading, setBizInfoLoading] = useState(false);
+  const [bizInfoSaving, setBizInfoSaving] = useState(false);
+  const [bizInfoStatus, setBizInfoStatus] = useState("");
+  const [bizId, setBizId] = useState<string|null>(null);
+
+  const [myPackages, setMyPackages] = useState<MyPkg[]>([]);
+  const [editingPkg, setEditingPkg] = useState<MyPkg|null>(null);
+  const [editData, setEditData] = useState({ name:"", description:"", original_price:"", discounted_price:"", stock:"", category:"", is_active:true });
+  const [editStatus, setEditStatus] = useState("");
 
   const [toast, setToast] = useState<string|null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout>|null>(null);
@@ -89,49 +108,151 @@ export default function Home() {
     toastTimer.current = setTimeout(() => setToast(null), 5000);
   }, [playDing]);
 
+  // ── Auth token helper ──
+  const getToken = useCallback(async (): Promise<string> => {
+    const { data: { session } } = await supabase.auth.getSession();
+    return session?.access_token ?? "";
+  }, []);
+
+  const authFetch = useCallback(async (url: string, opts: RequestInit = {}): Promise<Response> => {
+    const token = await getToken();
+    return fetch(url, {
+      ...opts,
+      headers: { "Content-Type": "application/json", ...(opts.headers ?? {}), "Authorization": `Bearer ${token}` },
+    });
+  }, [getToken]);
+
   // ── Fetchers ──
   const fetchOrders = useCallback(async () => {
-    try { const r = await fetch(`${API_URL}/api/v1/business/orders`); if (r.ok) setOrders((await r.json()) || []); } catch { /* */ }
-  }, []);
+    try { const r = await authFetch(`${API_URL}/api/v1/business/orders`); if (r.ok) setOrders((await r.json()) || []); } catch { /* */ }
+  }, [authFetch]);
 
   const fetchLocation = useCallback(async () => {
     try {
-      const r = await fetch(`${API_URL}/api/v1/business/location`);
+      const r = await authFetch(`${API_URL}/api/v1/business/location`);
       if (r.ok) { const d = await r.json(); if (d.latitude !== 0 || d.longitude !== 0) { setLocLat(d.latitude.toString()); setLocLon(d.longitude.toString()); setBizName(d.name || ""); setLocStatus("Kayıtlı konum yüklendi."); } }
     } catch { /* */ }
-  }, []);
+  }, [authFetch]);
 
   const fetchStats = useCallback(async () => {
     setStatsLoading(true);
-    try { const r = await fetch(`${API_URL}/api/v1/business/stats`); if (r.ok) setStats(await r.json()); } catch { /* */ }
+    try { const r = await authFetch(`${API_URL}/api/v1/business/stats`); if (r.ok) setStats(await r.json()); } catch { /* */ }
     finally { setStatsLoading(false); }
-  }, []);
+  }, [authFetch]);
 
   const fetchReviews = useCallback(async () => {
     setReviewsLoading(true);
-    try { const r = await fetch(`${API_URL}/api/v1/business/reviews`); if (r.ok) { const d = await r.json(); setReviews(d.reviews||[]); setAvgRating(d.avg_rating||0); setReviewCount(d.count||0); } } catch { /* */ }
+    try { const r = await authFetch(`${API_URL}/api/v1/business/reviews`); if (r.ok) { const d = await r.json(); setReviews(d.reviews||[]); setAvgRating(d.avg_rating||0); setReviewCount(d.count||0); } } catch { /* */ }
     finally { setReviewsLoading(false); }
+  }, [authFetch]);
+
+  const fetchMyPackages = useCallback(async () => {
+    try { const r = await authFetch(`${API_URL}/api/v1/business/packages`); if (r.ok) setMyPackages((await r.json()) || []); } catch { /* */ }
+  }, [authFetch]);
+
+  const openEdit = (pkg: MyPkg) => {
+    setEditingPkg(pkg);
+    setEditData({ name: pkg.name, description: pkg.description, original_price: pkg.original_price.toString(), discounted_price: pkg.discounted_price.toString(), stock: pkg.stock.toString(), category: pkg.category, is_active: pkg.is_active });
+    setEditStatus("");
+  };
+
+  const deletePackage = async (id: string) => {
+    if (!confirm("Bu paketi silmek istediğinizden emin misiniz?")) return;
+    const r = await authFetch(`${API_URL}/api/v1/business/packages/${id}`, { method: "DELETE" });
+    if (r.ok) setMyPackages(p => p.filter(pkg => pkg.id !== id));
+    else alert("Paket silinemedi.");
+  };
+
+  const handleEditSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingPkg) return;
+    setEditStatus("Kaydediliyor...");
+    try {
+      const r = await authFetch(`${API_URL}/api/v1/business/packages/${editingPkg.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ name: editData.name, description: editData.description, original_price: parseFloat(editData.original_price), discounted_price: parseFloat(editData.discounted_price), stock: parseInt(editData.stock), category: editData.category, is_active: editData.is_active }),
+      });
+      if (r.ok) { setEditStatus("Kaydedildi!"); fetchMyPackages(); setTimeout(() => setEditingPkg(null), 800); }
+      else { const e = await r.json(); setEditStatus("Hata: " + (e.error || "?")); }
+    } catch { setEditStatus("API'ye bağlanılamadı."); }
+  };
+
+  const fetchBizInfo = useCallback(async () => {
+    setBizInfoLoading(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const currentEmail = session?.user.email ?? "";
+      const { data } = await supabase.from("businesses").select("*").limit(1).single();
+      if (data) {
+        setBizId(data.id);
+        setBizInfo({
+          name:        data.name        || "",
+          address:     data.address     || "",
+          phone:       data.phone       || "",
+          email:       data.email       || "",
+          description: data.description || "",
+          logo_url:    data.logo_url    || "",
+          category:    data.category    || "",
+          website:     data.website     || "",
+        });
+        // Link owner_email if not set yet
+        if (!data.owner_email && currentEmail) {
+          await supabase.from("businesses").update({ owner_email: currentEmail }).eq("id", data.id);
+        }
+      }
+    } catch { /* */ } finally { setBizInfoLoading(false); }
   }, []);
+
+  const saveBizInfo = async () => {
+    if (!bizId) return;
+    setBizInfoSaving(true); setBizInfoStatus("");
+    const { error } = await supabase.from("businesses").update({
+      name:        bizInfo.name,
+      address:     bizInfo.address,
+      phone:       bizInfo.phone,
+      email:       bizInfo.email,
+      description: bizInfo.description,
+      logo_url:    bizInfo.logo_url,
+      category:    bizInfo.category,
+      website:     bizInfo.website,
+      updated_at:  new Date().toISOString(),
+    }).eq("id", bizId);
+    setBizInfoStatus(error ? "Hata: " + error.message : "Bilgiler kaydedildi!");
+    setBizInfoSaving(false);
+  };
 
   // ── Effects ──
   useEffect(() => {
-    fetchOrders(); fetchLocation(); fetchStats(); fetchReviews();
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!session) { router.replace("/login"); } else { setAuthChecked(true); setUserEmail(session.user.email ?? ""); }
+    });
+  }, [router]);
+
+  useEffect(() => {
+    if (!authChecked) return;
+    fetchOrders(); fetchLocation(); fetchStats(); fetchReviews(); fetchBizInfo(); fetchMyPackages();
     const ch = supabase.channel("biz-orders")
       .on("postgres_changes", { event:"INSERT", schema:"public", table:"orders" }, () => { fetchOrders(); showToast("Yeni sipariş geldi!"); })
       .subscribe();
     return () => { supabase.removeChannel(ch); if (toastTimer.current) clearTimeout(toastTimer.current); };
-  }, [fetchOrders, fetchLocation, fetchStats, fetchReviews, showToast]);
+  }, [authChecked, authFetch, fetchOrders, fetchLocation, fetchStats, fetchReviews, fetchBizInfo, fetchMyPackages, showToast]);
 
   useEffect(() => {
-    if (activeTab === "stats")   fetchStats();
-    if (activeTab === "reviews") fetchReviews();
-  }, [activeTab, fetchStats, fetchReviews]);
+    if (activeTab === "stats")    fetchStats();
+    if (activeTab === "reviews")  fetchReviews();
+    if (activeTab === "business") fetchBizInfo();
+  }, [activeTab, fetchStats, fetchReviews, fetchBizInfo]);
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    router.replace("/login");
+  };
 
   // ── Actions ──
   const updateStatus = async (id: string, s: string) => {
     setUpdatingId(id);
     try {
-      const r = await fetch(`${API_URL}/api/v1/orders/${id}/status`, { method:"PATCH", headers:{"Content-Type":"application/json"}, body:JSON.stringify({status:s}) });
+      const r = await authFetch(`${API_URL}/api/v1/orders/${id}/status`, { method:"PATCH", body:JSON.stringify({status:s}) });
       if (r.ok) setOrders(p => p.map(o => o.id===id ? {...o,status:s} : o));
       else { const e = await r.json(); alert("Hata: " + (e.error||"Güncellenemedi")); }
     } catch { alert("API'ye bağlanılamadı."); } finally { setUpdatingId(null); }
@@ -152,7 +273,7 @@ export default function Home() {
     if (isNaN(lat)||isNaN(lon)||lat===0||lon===0) { setLocStatus("Geçerli koordinat girin."); return; }
     setIsSavingLoc(true);
     try {
-      const r = await fetch(`${API_URL}/api/v1/business/location`, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({name:bizName,latitude:lat,longitude:lon}) });
+      const r = await authFetch(`${API_URL}/api/v1/business/location`, { method:"POST", body:JSON.stringify({name:bizName,latitude:lat,longitude:lon}) });
       if (r.ok) { setLocStatus("Konum kaydedildi!"); setLocExpanded(false); }
       else { const e=await r.json(); setLocStatus("Hata: "+(e.error||"?")); }
     } catch { setLocStatus("API'ye bağlanılamadı."); } finally { setIsSavingLoc(false); }
@@ -172,21 +293,32 @@ export default function Home() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault(); setSubmitStatus("Yükleniyor...");
     try {
-      const r = await fetch(`${API_URL}/api/v1/business/packages`, {
-        method:"POST", headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({ name:formData.name, description:formData.description, original_price:parseFloat(formData.original_price), discounted_price:parseFloat(formData.discounted_price), stock:parseInt(formData.stock), category:formData.category, tags:formData.tags.split(",").map(t=>t.trim()).filter(Boolean), image_url:imageUrl, business_name:bizName, latitude:locLat?parseFloat(locLat):0, longitude:locLon?parseFloat(locLon):0 }),
+      const r = await authFetch(`${API_URL}/api/v1/business/packages`, {
+        method:"POST",
+        body:JSON.stringify({ name:formData.name, description:formData.description, original_price:parseFloat(formData.original_price), discounted_price:parseFloat(formData.discounted_price), stock:parseInt(formData.stock), category:formData.category, tags:formData.tags.split(",").map(t=>t.trim()).filter(Boolean), image_url:imageUrl, business_name:bizName, latitude:locLat?parseFloat(locLat):0, longitude:locLon?parseFloat(locLon):0, available_from:formData.available_from||undefined, available_until:formData.available_until||undefined }),
       });
-      if (r.ok) { setSubmitStatus("Paket başarıyla eklendi!"); setFormData({name:"",description:"",original_price:"",discounted_price:"",stock:"",category:"",tags:""}); setImageUrl(""); fetchOrders(); fetchStats(); }
-      else { setSubmitStatus("Bir hata oluştu."); }
+      if (r.ok) { setSubmitStatus("Paket başarıyla eklendi!"); setFormData({name:"",description:"",original_price:"",discounted_price:"",stock:"",category:"",tags:"",available_from:"",available_until:""}); setImageUrl(""); fetchOrders(); fetchStats(); }
+      else { const e = await r.json(); setSubmitStatus("Hata: " + (e.error || "Paket eklenemedi.")); }
     } catch { setSubmitStatus("API'ye bağlanılamadı."); }
   };
 
   const fc = (e: React.ChangeEvent<HTMLInputElement|HTMLTextAreaElement>) => setFormData({...formData,[e.target.name]:e.target.value});
 
-  const activeOrders = orders.filter(o => o.status !== "Teslim Edildi");
-  const pastOrders   = orders.filter(o => o.status === "Teslim Edildi");
+  const terminal = ["Teslim Edildi", "\u0130ptal Edildi"];
+  const activeOrders    = orders.filter(o => !terminal.includes(o.status));
+  const pastOrders      = orders.filter(o => o.status === "Teslim Edildi");
+  const cancelledOrders = orders.filter(o => o.status === "\u0130ptal Edildi");
+  const pendingCount    = orders.filter(o => o.status === "Sipariş Alındı").length;
 
   // ═══════════════ RENDER ═══════════════
+  if (!authChecked) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="w-10 h-10 border-4 border-orange-500 border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gray-50">
 
@@ -224,8 +356,8 @@ export default function Home() {
                 className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${activeTab===id ? "bg-orange-50 text-orange-600" : "text-gray-500 hover:bg-gray-50 hover:text-gray-800"}`}>
                 <Icon className="w-4 h-4 shrink-0"/>
                 {label}
-                {id==="orders" && activeOrders.length > 0 && (
-                  <span className="ml-auto bg-orange-500 text-white text-[10px] font-bold w-5 h-5 rounded-full flex items-center justify-center">{activeOrders.length}</span>
+                {id==="orders" && pendingCount > 0 && (
+                  <span className="ml-auto bg-orange-500 text-white text-[10px] font-bold w-5 h-5 rounded-full flex items-center justify-center">{pendingCount}</span>
                 )}
                 {id==="reviews" && reviewCount > 0 && (
                   <span className="ml-auto text-xs text-gray-400">{avgRating.toFixed(1)} ⭐</span>
@@ -245,6 +377,18 @@ export default function Home() {
                 <Plus className="w-4 h-4"/> Paket Ekle
               </button>
             )}
+            <div className="pt-1 border-t border-gray-100">
+              <div className="flex items-center gap-2 px-2 py-1.5 mb-1">
+                <div className="w-7 h-7 bg-orange-100 rounded-full flex items-center justify-center shrink-0">
+                  <span className="text-xs font-bold text-orange-600">{userEmail ? userEmail[0].toUpperCase() : "?"}</span>
+                </div>
+                <p className="text-xs text-gray-500 truncate">{userEmail}</p>
+              </div>
+              <button onClick={handleLogout}
+                className="flex items-center justify-center gap-2 w-full py-2 bg-gray-50 hover:bg-red-50 hover:text-red-600 text-gray-500 border border-gray-200 hover:border-red-200 rounded-xl text-xs font-medium transition-colors">
+                Çıkış Yap
+              </button>
+            </div>
           </div>
         </aside>
 
@@ -267,12 +411,13 @@ export default function Home() {
           <header className="hidden md:flex items-center justify-between px-8 py-5 bg-white border-b border-gray-100 sticky top-0 z-10">
             <div>
               <h1 className="text-lg font-bold text-gray-900">
-                {activeTab==="orders" ? "Siparişler" : activeTab==="stats" ? "İstatistikler & Raporlar" : "Müşteri Yorumları"}
+                {activeTab==="orders" ? "Siparişler" : activeTab==="stats" ? "İstatistikler & Raporlar" : activeTab==="reviews" ? "Müşteri Yorumları" : "İşletme Bilgileri"}
               </h1>
               <p className="text-xs text-gray-400 mt-0.5">
-                {activeTab==="orders" ? `${activeOrders.length} aktif · ${pastOrders.length} tamamlanan` :
-                 activeTab==="stats"  ? "Satış performansı ve analiz" :
-                 `${reviewCount} değerlendirme · ${avgRating.toFixed(1)} ortalama puan`}
+                {activeTab==="orders"   ? `${activeOrders.length} aktif · ${pastOrders.length} tamamlanan · ${cancelledOrders.length} iptal` :
+                 activeTab==="stats"    ? "Satış performansı ve analiz" :
+                 activeTab==="reviews"  ? `${reviewCount} değerlendirme · ${avgRating.toFixed(1)} ortalama puan` :
+                 "İşletme profil bilgilerini görüntüle ve düzenle"}
               </p>
             </div>
             <div className="flex items-center gap-3">
@@ -352,38 +497,11 @@ export default function Home() {
 
             {/* ══════ SİPARİŞLER ══════ */}
             {activeTab === "orders" && (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-5xl">
+              <div className="max-w-5xl space-y-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
 
-                {/* LEFT: Location + Form */}
+                {/* LEFT: Form */}
                 <div className="space-y-5">
-
-                  {/* Location */}
-                  <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
-                    <button className="w-full flex items-center justify-between px-5 py-4" onClick={() => setLocExpanded(v=>!v)}>
-                      <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 bg-orange-50 rounded-lg flex items-center justify-center"><MapPin className="w-4 h-4 text-orange-500"/></div>
-                        <div className="text-left">
-                          <p className="text-sm font-semibold text-gray-800">Dükkan Konumu</p>
-                          <p className="text-xs text-gray-400 mt-0.5">{locLat&&locLon ? `${parseFloat(locLat).toFixed(4)}, ${parseFloat(locLon).toFixed(4)}` : "Henüz ayarlanmadı"}</p>
-                        </div>
-                      </div>
-                      {locExpanded ? <ChevronUp className="w-4 h-4 text-gray-400"/> : <ChevronDown className="w-4 h-4 text-gray-400"/>}
-                    </button>
-                    {locExpanded && (
-                      <div className="px-5 pb-5 pt-1 border-t border-gray-50 space-y-2.5">
-                        <input type="text" placeholder="Dükkan / İşletme Adı" value={bizName} onChange={e=>setBizName(e.target.value)} className={INPUT}/>
-                        <div className="grid grid-cols-2 gap-2">
-                          <input type="number" step="0.000001" placeholder="Enlem" value={locLat} onChange={e=>setLocLat(e.target.value)} className={INPUT}/>
-                          <input type="number" step="0.000001" placeholder="Boylam" value={locLon} onChange={e=>setLocLon(e.target.value)} className={INPUT}/>
-                        </div>
-                        <div className="grid grid-cols-2 gap-2">
-                          <button onClick={getGPS} disabled={isLocating} className="bg-gray-50 border border-gray-200 text-gray-700 text-xs font-semibold py-3 rounded-xl hover:bg-gray-100 disabled:opacity-50 transition-colors">{isLocating?"Alınıyor...":"📡 GPS"}</button>
-                          <button onClick={saveLocation} disabled={isSavingLoc||!locLat||!locLon} className="bg-orange-500 text-white text-xs font-semibold py-3 rounded-xl hover:bg-orange-600 disabled:opacity-50 transition-colors">{isSavingLoc?"Kaydediliyor...":"Kaydet"}</button>
-                        </div>
-                        {locStatus && <p className="text-xs text-gray-500">{locStatus}</p>}
-                      </div>
-                    )}
-                  </div>
 
                   {/* Package Form */}
                   <div id="pkg-form" className={CARD}>
@@ -403,6 +521,19 @@ export default function Home() {
                         <input name="tags" value={formData.tags} onChange={fc} placeholder="Etiketler (virgülle)" className={INPUT}/>
                       </div>
                       <input required name="stock" type="number" value={formData.stock} onChange={fc} placeholder="Stok adedi" className={INPUT}/>
+                      <div>
+                        <label className="block text-xs text-gray-500 font-medium mb-1.5">Geçerlilik Saati <span className="text-gray-400 font-normal">(isteğe bağlı)</span></label>
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <span className="text-xs text-gray-400 block mb-1">Başlangıç</span>
+                            <input name="available_from" type="time" value={formData.available_from} onChange={fc} className={INPUT}/>
+                          </div>
+                          <div>
+                            <span className="text-xs text-gray-400 block mb-1">Bitiş</span>
+                            <input name="available_until" type="time" value={formData.available_until} onChange={fc} className={INPUT}/>
+                          </div>
+                        </div>
+                      </div>
                       <div>
                         <label className="block text-xs text-gray-500 font-medium mb-1.5">Fotoğraf</label>
                         <input type="file" accept="image/*" onChange={uploadImage} className="w-full text-xs text-gray-500 file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-orange-50 file:text-orange-600 hover:file:bg-orange-100 cursor-pointer"/>
@@ -447,7 +578,7 @@ export default function Home() {
                   ) : (
                     <div className="space-y-3">
                       {activeOrders.map(order => {
-                        const s = STATUS[order.status] ?? STATUS["Ödendi"];
+                        const s = STATUS[order.status] ?? STATUS["Sipariş Alındı"];
                         const upd = updatingId === order.id;
                         return (
                           <div key={order.id} className="border border-gray-100 rounded-xl p-4 bg-gray-50 hover:bg-white transition-colors">
@@ -460,7 +591,7 @@ export default function Home() {
                                 <span className={`w-1.5 h-1.5 rounded-full ${s.dot}`}/>{order.status}
                               </span>
                             </div>
-                            {order.status==="Ödendi" && <button disabled={upd} onClick={()=>updateStatus(order.id,"Hazırlanıyor")} className="w-full bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white text-xs font-semibold py-2.5 rounded-lg transition-colors">{upd?"Güncelleniyor...":"👨‍🍳 Hazırlanmaya Başla"}</button>}
+                            {order.status==="Sipariş Alındı" && <button disabled={upd} onClick={()=>updateStatus(order.id,"Hazırlanıyor")} className="w-full bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white text-xs font-semibold py-2.5 rounded-lg transition-colors">{upd?"Güncelleniyor...":"👨‍🍳 Hazırlanmaya Başla"}</button>}
                             {order.status==="Hazırlanıyor" && <button disabled={upd} onClick={()=>updateStatus(order.id,"Teslim Edilmeyi Bekliyor")} className="w-full bg-violet-600 hover:bg-violet-700 disabled:opacity-50 text-white text-xs font-semibold py-2.5 rounded-lg transition-colors">{upd?"Güncelleniyor...":"🚀 Hazır — Müşteriyi Bildir"}</button>}
                             {order.status==="Teslim Edilmeyi Bekliyor" && <div className="w-full bg-violet-50 text-violet-600 text-xs font-medium py-2.5 rounded-lg text-center">📲 QR bekleniyor...</div>}
                           </div>
@@ -482,7 +613,55 @@ export default function Home() {
                       </div>
                     </div>
                   )}
+
+                  {cancelledOrders.length > 0 && (
+                    <div className="mt-4 pt-4 border-t border-gray-100">
+                      <p className="text-xs text-red-400 font-medium mb-2">İptal Edilenler ({cancelledOrders.length})</p>
+                      <div className="space-y-1">
+                        {cancelledOrders.slice(0,3).map(o=>(
+                          <div key={o.id} className="flex items-center justify-between px-3 py-2 rounded-lg bg-red-50">
+                            <span className="text-xs text-red-500 truncate">{o.package_name}</span>
+                            <span className="text-xs text-red-400 shrink-0 ml-2">{o.buyer_email}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
+              </div>{/* end grid */}
+
+              {/* Paketlerim */}
+              <div className={CARD}>
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className="text-sm font-bold text-gray-900">Paketlerim</h2>
+                  <button onClick={fetchMyPackages} className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-600 transition-colors"><RefreshCw className="w-3 h-3"/>Yenile</button>
+                </div>
+                {myPackages.length === 0 ? (
+                  <div className="flex flex-col items-center py-8 text-center">
+                    <Package className="w-8 h-8 text-gray-300 mb-2"/>
+                    <p className="text-sm text-gray-400">Henüz paket eklemediniz</p>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {myPackages.map(pkg => (
+                      <div key={pkg.id} className="flex items-center justify-between gap-3 border border-gray-100 rounded-xl px-4 py-3 hover:bg-gray-50 transition-colors">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <p className="text-sm font-semibold text-gray-800 truncate">{pkg.name}</p>
+                            <span className={`shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-full ${pkg.is_active ? "bg-emerald-50 text-emerald-700" : "bg-gray-100 text-gray-400"}`}>{pkg.is_active ? "Aktif" : "Pasif"}</span>
+                          </div>
+                          <p className="text-xs text-gray-400 mt-0.5">₺{pkg.discounted_price.toFixed(2)} · Stok: {pkg.stock} · {pkg.category}</p>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button onClick={() => openEdit(pkg)} className="text-xs text-orange-500 hover:text-orange-700 font-semibold border border-orange-200 hover:border-orange-400 rounded-lg px-3 py-1.5 transition-colors">Düzenle</button>
+                          <button onClick={() => deletePackage(pkg.id)} className="text-xs text-red-400 hover:text-red-600 border border-red-100 hover:border-red-300 rounded-lg px-2 py-1.5 transition-colors" title="Paketi Sil">🗑️</button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
               </div>
             )}
 
@@ -562,8 +741,140 @@ export default function Home() {
               </div>
             )}
 
+            {/* ══════ İŞLETME BİLGİLERİ ══════ */}
+            {activeTab === "business" && (
+              <div className="max-w-xl space-y-5">
+                {bizInfoLoading ? (
+                  <div className="flex justify-center py-20"><Activity className="w-6 h-6 text-orange-500 animate-spin"/></div>
+                ) : (
+                  <>
+                  <div className={CARD}>
+                    <h2 className="text-sm font-bold text-gray-900 mb-5">İşletme Profili</h2>
+                    <div className="space-y-3">
+                      <div>
+                        <label className="block text-xs text-gray-500 font-medium mb-1">İşletme Adı</label>
+                        <input value={bizInfo.name} onChange={e=>setBizInfo(p=>({...p,name:e.target.value}))} placeholder="İşletme adı" className={INPUT}/>
+                      </div>
+                      <div>
+                        <label className="block text-xs text-gray-500 font-medium mb-1">Kategori</label>
+                        <select value={bizInfo.category} onChange={e=>setBizInfo(p=>({...p,category:e.target.value}))} className={INPUT+" bg-gray-50"}>
+                          <option value="">Kategori seçin</option>
+                          <option>Restoran</option><option>Kafe</option><option>Pastane & Fırın</option>
+                          <option>Fast Food</option><option>Yemekhane</option><option>Diğer</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs text-gray-500 font-medium mb-1">Adres</label>
+                        <input value={bizInfo.address} onChange={e=>setBizInfo(p=>({...p,address:e.target.value}))} placeholder="Sokak, Mahalle, İlçe, Şehir" className={INPUT}/>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="block text-xs text-gray-500 font-medium mb-1">Telefon</label>
+                          <input value={bizInfo.phone} onChange={e=>setBizInfo(p=>({...p,phone:e.target.value}))} placeholder="+90 555 000 00 00" className={INPUT}/>
+                        </div>
+                        <div>
+                          <label className="block text-xs text-gray-500 font-medium mb-1">E-posta</label>
+                          <input type="email" value={bizInfo.email} onChange={e=>setBizInfo(p=>({...p,email:e.target.value}))} placeholder="info@isletme.com" className={INPUT}/>
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-xs text-gray-500 font-medium mb-1">Web Sitesi</label>
+                        <input value={bizInfo.website} onChange={e=>setBizInfo(p=>({...p,website:e.target.value}))} placeholder="https://www.isletme.com" className={INPUT}/>
+                      </div>
+                      <div>
+                        <label className="block text-xs text-gray-500 font-medium mb-1">Açıklama</label>
+                        <textarea value={bizInfo.description} onChange={e=>setBizInfo(p=>({...p,description:e.target.value}))} placeholder="İşletmeniz hakkında kısa bir tanıtım..." rows={3} className={INPUT+" resize-none"}/>
+                      </div>
+                      <div>
+                        <label className="block text-xs text-gray-500 font-medium mb-1">Logo URL</label>
+                        <input value={bizInfo.logo_url} onChange={e=>setBizInfo(p=>({...p,logo_url:e.target.value}))} placeholder="https://..." className={INPUT}/>
+                        {bizInfo.logo_url && (
+                          <div className="mt-2 flex items-center gap-3">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img src={bizInfo.logo_url} alt="logo" className="w-14 h-14 object-cover rounded-xl border border-gray-100"/>
+                            <p className="text-xs text-gray-400">Önizleme</p>
+                          </div>
+                        )}
+                      </div>
+                      <button onClick={saveBizInfo} disabled={bizInfoSaving||!bizId}
+                        className="w-full py-3 bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white rounded-xl font-semibold text-sm transition-colors">
+                        {bizInfoSaving ? "Kaydediliyor..." : "Bilgileri Kaydet"}
+                      </button>
+                      {bizInfoStatus && (
+                        <p className={`text-center text-sm font-medium ${bizInfoStatus.startsWith("Hata") ? "text-red-500" : "text-emerald-600"}`}>
+                          {bizInfoStatus}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Konum */}
+                  <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
+                    <button className="w-full flex items-center justify-between px-5 py-4" onClick={() => setLocExpanded(v=>!v)}>
+                      <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 bg-orange-50 rounded-lg flex items-center justify-center"><MapPin className="w-4 h-4 text-orange-500"/></div>
+                        <div className="text-left">
+                          <p className="text-sm font-semibold text-gray-800">Harita Konumu</p>
+                          <p className="text-xs text-gray-400 mt-0.5">{locLat&&locLon ? `${parseFloat(locLat).toFixed(4)}, ${parseFloat(locLon).toFixed(4)}` : "Henüz ayarlanmadı"}</p>
+                        </div>
+                      </div>
+                      {locExpanded ? <ChevronUp className="w-4 h-4 text-gray-400"/> : <ChevronDown className="w-4 h-4 text-gray-400"/>}
+                    </button>
+                    {locExpanded && (
+                      <div className="px-5 pb-5 pt-1 border-t border-gray-50 space-y-2.5">
+                        <input type="text" placeholder="Dükkan / İşletme Adı" value={bizName} onChange={e=>setBizName(e.target.value)} className={INPUT}/>
+                        <div className="grid grid-cols-2 gap-2">
+                          <input type="number" step="0.000001" placeholder="Enlem" value={locLat} onChange={e=>setLocLat(e.target.value)} className={INPUT}/>
+                          <input type="number" step="0.000001" placeholder="Boylam" value={locLon} onChange={e=>setLocLon(e.target.value)} className={INPUT}/>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <button onClick={getGPS} disabled={isLocating} className="bg-gray-50 border border-gray-200 text-gray-700 text-xs font-semibold py-3 rounded-xl hover:bg-gray-100 disabled:opacity-50 transition-colors">{isLocating?"Alınıyor...":"📡 GPS"}</button>
+                          <button onClick={saveLocation} disabled={isSavingLoc||!locLat||!locLon} className="bg-orange-500 text-white text-xs font-semibold py-3 rounded-xl hover:bg-orange-600 disabled:opacity-50 transition-colors">{isSavingLoc?"Kaydediliyor...":"Kaydet"}</button>
+                        </div>
+                        {locStatus && <p className="text-xs text-gray-500">{locStatus}</p>}
+                      </div>
+                    )}
+                  </div>
+                  </>
+                )}
+              </div>
+            )}
+
           </main>
         </div>
+
+        {/* ════════ EDIT PACKAGE MODAL ════════ */}
+        {editingPkg && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={e => { if (e.target === e.currentTarget) setEditingPkg(null); }}>
+            <div className="bg-white rounded-2xl w-full max-w-md max-h-[90vh] overflow-y-auto p-6 shadow-2xl">
+              <div className="flex items-center justify-between mb-5">
+                <h2 className="text-base font-bold text-gray-900">Paketi Düzenle</h2>
+                <button onClick={() => setEditingPkg(null)} className="text-gray-400 hover:text-gray-700 text-xl font-light leading-none">✕</button>
+              </div>
+              <form onSubmit={handleEditSubmit} className="space-y-3">
+                <input required value={editData.name} onChange={e=>setEditData(p=>({...p,name:e.target.value}))} placeholder="Paket adı" className={INPUT}/>
+                <textarea required value={editData.description} onChange={e=>setEditData(p=>({...p,description:e.target.value}))} placeholder="Açıklama" rows={3} className={INPUT+" resize-none"}/>
+                <div className="grid grid-cols-2 gap-2">
+                  <input required type="number" step="0.01" value={editData.original_price} onChange={e=>setEditData(p=>({...p,original_price:e.target.value}))} placeholder="Normal ₺" className={INPUT}/>
+                  <input required type="number" step="0.01" value={editData.discounted_price} onChange={e=>setEditData(p=>({...p,discounted_price:e.target.value}))} placeholder="İndirimli ₺" className={INPUT}/>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <select required value={editData.category} onChange={e=>setEditData(p=>({...p,category:e.target.value}))} className={INPUT+" bg-gray-50"}>
+                    <option value="">Kategori</option>
+                    <option>Sıcak Yemek</option><option>Soğuk Sandviç</option><option>Tatlı & Pastane</option><option>Vegan/Vejetaryen</option><option>İçecek</option><option>Diğer</option>
+                  </select>
+                  <input required type="number" value={editData.stock} onChange={e=>setEditData(p=>({...p,stock:e.target.value}))} placeholder="Stok" className={INPUT}/>
+                </div>
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <input type="checkbox" checked={editData.is_active} onChange={e=>setEditData(p=>({...p,is_active:e.target.checked}))} className="w-4 h-4 accent-orange-500"/>
+                  <span className="text-sm text-gray-700">Aktif (müşterilere göster)</span>
+                </label>
+                <button type="submit" className="w-full py-3 bg-orange-500 hover:bg-orange-600 text-white rounded-xl font-semibold text-sm transition-colors">Kaydet</button>
+                {editStatus && <p className={`text-center text-sm font-medium ${editStatus.startsWith("Hata") ? "text-red-500" : editStatus.includes("Kaydedildi") ? "text-emerald-600" : "text-gray-500"}`}>{editStatus}</p>}
+              </form>
+            </div>
+          </div>
+        )}
 
         {/* ════════ MOBILE BOTTOM NAV ════════ */}
         <nav className="md:hidden fixed bottom-0 inset-x-0 bg-white border-t border-gray-100 flex z-20 safe-b">

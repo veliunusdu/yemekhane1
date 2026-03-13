@@ -1,0 +1,141 @@
+{
+  "packages": [
+    {
+      "package": "app_links",
+      "kind": "transitive",
+      "isDiscontinued": false,
+      "isCurrentRetracted": false,
+      "isCurrentAffectedByAdvisory": false,
+      "current": {
+        "version": "6.4.1"
+      },
+      "upgradable": {
+        "version": "6.4.1"
+      },
+      "resolvable": {
+        "version": "6.4.1"
+      },
+      "latest": {
+        "version": "7.0.0"
+      }
+    },
+    {
+      "package": "meta",
+      "kind": "transitive",
+      "isDiscontinued": false,
+      "isCurrentRetracted": false,
+      "isCurrentAffectedByAdvisory": false,
+      "current": {
+        "version": "1.17.0"
+      },
+      "upgradable": {
+        "version": "1.17.0"
+      },
+      "resolvable": {
+        "version": "1.17.0"
+      },
+      "latest": {
+        "version": "1.18.1"
+      }
+    },
+    {
+      "package": "mgrs_dart",
+      "kind": "transitive",
+      "isDiscontinued": false,
+      "isCurrentRetracted": false,
+      "isCurrentAffectedByAdvisory": false,
+      "current": {
+        "version": "2.0.0"
+      },
+      "upgradable": {
+        "version": "2.0.0"
+      },
+      "resolvable": {
+        "version": "2.0.0"
+      },
+      "latest": {
+        "version": "3.0.0"
+      }
+    },
+    {
+      "package": "proj4dart",
+      "kind": "transitive",
+      "isDiscontinued": false,
+      "isCurrentRetracted": false,
+      "isCurrentAffectedByAdvisory": false,
+      "current": {
+        "version": "2.1.0"
+      },
+      "upgradable": {
+        "version": "2.1.0"
+      },
+      "resolvable": {
+        "version": "2.1.0"
+      },
+      "latest": {
+        "version": "3.0.0"
+      }
+    },
+    {
+      "package": "unicode",
+      "kind": "transitive",
+      "isDiscontinued": false,
+      "isCurrentRetracted": false,
+      "isCurrentAffectedByAdvisory": false,
+      "current": {
+        "version": "0.3.1"
+      },
+      "upgradable": {
+        "version": "0.3.1"
+      },
+      "resolvable": {
+        "version": "0.3.1"
+      },
+      "latest": {
+        "version": "1.1.9"
+      }
+    },
+    {
+      "package": "web",
+      "kind": "transitive",
+      "isDiscontinued": false,
+      "isCurrentRetracted": false,
+      "isCurrentAffectedByAdvisory": false,
+      "current": {
+        "version": "0.5.1",
+        "overridden": true
+      },
+      "upgradable": {
+        "version": "0.5.1",
+        "overridden": true
+      },
+      "resolvable": {
+        "version": "0.5.1",
+        "overridden": true
+      },
+      "latest": {
+        "version": "1.1.1",
+        "overridden": true
+      }
+    },
+    {
+      "package": "win32",
+      "kind": "transitive",
+      "isDiscontinued": false,
+      "isCurrentRetracted": false,
+      "isCurrentAffectedByAdvisory": false,
+      "current": {
+        "version": "5.15.0"
+      },
+      "upgradable": {
+        "version": "5.15.0"
+      },
+      "resolvable": {
+        "version": "5.15.0"
+      },
+      "latest": {
+        "version": "6.0.0"
+      }
+    }
+  ]
+}

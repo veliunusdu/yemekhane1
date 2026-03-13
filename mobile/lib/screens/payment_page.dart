@@ -16,6 +16,19 @@ class _PaymentPageState extends State<PaymentPage> {
   WebViewController? _controller;
   bool _isLoading = true;
 
+  // Extracts the Iyzico payment token from the callback redirect URL
+  String _extractToken(String url) {
+    try { return Uri.parse(url).queryParameters['token'] ?? ''; } catch (_) { return ''; }
+  }
+
+  bool _popped = false;
+  void _popWithToken(String url) {
+    if (_popped) return;
+    _popped = true;
+    final token = _extractToken(url);
+    if (mounted) Navigator.pop(context, token);
+  }
+
   @override
   void initState() {
     super.initState();
@@ -36,14 +49,14 @@ class _PaymentPageState extends State<PaymentPage> {
             onNavigationRequest: (NavigationRequest request) {
               String url = request.url;
               if (url.contains('iyzico-callback') || url.contains('yemekhane_callback')) {
-                Navigator.pop(context, true);
+                _popWithToken(url);
                 return NavigationDecision.prevent;
               }
               return NavigationDecision.navigate;
             },
             onPageStarted: (String url) {
               if (url.contains('iyzico-callback') || url.contains('yemekhane_callback')) {
-                Navigator.pop(context, true);
+                _popWithToken(url);
                 return;
               }
               setState(() => _isLoading = true);
@@ -51,7 +64,7 @@ class _PaymentPageState extends State<PaymentPage> {
             onPageFinished: (_) => setState(() => _isLoading = false),
             onWebResourceError: (WebResourceError error) {
               if (error.url?.contains('iyzico-callback') == true || error.url?.contains('yemekhane_callback') == true) {
-                Navigator.pop(context, true);
+                _popWithToken(error.url ?? '');
                 return;
               }
               setState(() => _isLoading = false);
@@ -73,7 +86,7 @@ class _PaymentPageState extends State<PaymentPage> {
           foregroundColor: Colors.white,
           leading: IconButton(
             icon: const Icon(Icons.close),
-            onPressed: () => Navigator.pop(context, false),
+            onPressed: () => Navigator.pop(context),
           ),
         ),
         body: Center(
@@ -105,7 +118,7 @@ class _PaymentPageState extends State<PaymentPage> {
               ),
               const SizedBox(height: 24),
               OutlinedButton(
-                onPressed: () => Navigator.pop(context, true),
+                onPressed: () => Navigator.pop(context, ''),
                 child: const Text('Ödemeyi Tamamladım, Geri Dön'),
               ),
             ],
@@ -122,7 +135,7 @@ class _PaymentPageState extends State<PaymentPage> {
         foregroundColor: Colors.white,
         leading: IconButton(
           icon: const Icon(Icons.close),
-          onPressed: () => Navigator.pop(context, false),
+          onPressed: () => Navigator.pop(context),
         ),
       ),
       body: Stack(

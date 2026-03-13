@@ -3,19 +3,25 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
+	"math/big"
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
+
+	jwtv4 "github.com/golang-jwt/jwt/v4"
 
 	fire "firebase.google.com/go/v4"
 	"firebase.google.com/go/v4/messaging"
-	iyzipay "github.com/JspBack/iyzipay-go"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/logger"
@@ -23,7 +29,6 @@ import (
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 	"github.com/redis/go-redis/v9"
-	"github.com/resend/resend-go/v2"
 	"google.golang.org/api/option"
 
 	// Kendi modül adınla değiştirmeyi unutma!
@@ -33,6 +38,47 @@ import (
 var ctx = context.Background()
 var redisClient *redis.Client
 var fcmClient *messaging.Client
+var supabasePublicKey *ecdsa.PublicKey
+
+// Supabase JWKS endpoint'inden ES256 public key'i çeker
+func fetchSupabaseJWKS(supabaseURL string) (*ecdsa.PublicKey, error) {
+	resp, err := http.Get(supabaseURL + "/auth/v1/.well-known/jwks.json")
+	if err != nil {
+		return nil, fmt.Errorf("JWKS fetch hatası: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var jwks struct {
+		Keys []struct {
+			Kty string `json:"kty"`
+			Crv string `json:"crv"`
+			X   string `json:"x"`
+			Y   string `json:"y"`
+		} `json:"keys"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&jwks); err != nil {
+		return nil, fmt.Errorf("JWKS parse hatası: %v", err)
+	}
+
+	for _, key := range jwks.Keys {
+		if key.Kty == "EC" && key.Crv == "P-256" {
+			xBytes, err := base64.RawURLEncoding.DecodeString(key.X)
+			if err != nil {
+				continue
+			}
+			yBytes, err := base64.RawURLEncoding.DecodeString(key.Y)
+			if err != nil {
+				continue
+			}
+			return &ecdsa.PublicKey{
+				Curve: elliptic.P256(),
+				X:     new(big.Int).SetBytes(xBytes),
+				Y:     new(big.Int).SetBytes(yBytes),
+			}, nil
+		}
+	}
+	return nil, fmt.Errorf("uygun EC P-256 key bulunamadı")
+}
 
 // FCM bildirim helper — tek bir token'a gönderir
 func sendFCMNotification(token, title, body string) {
@@ -83,29 +129,66 @@ func sendFCMToAll(db *sql.DB, title, body string) {
 	}
 }
 
-// Resend ile E-posta Gönder
-func sendSuccessEmail(targetEmail string, paymentID string) {
-	apiKey := os.Getenv("RESEND_API_KEY")
-	if apiKey == "" {
-		log.Println("UYARI: RESEND_API_KEY bulunamadı!")
-		return
+// rateLimiter, IP başına n istek / window süresi sınırını Redis'te uygular.
+// Redis bağlı değilse şeffaf geçiş yapar (fail-open).
+func rateLimiter(max int, window time.Duration) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		if redisClient == nil {
+			return c.Next()
+		}
+		ip := c.IP()
+		key := fmt.Sprintf("rl:%s:%s", c.Path(), ip)
+		pipe := redisClient.Pipeline()
+		incr := pipe.Incr(ctx, key)
+		pipe.Expire(ctx, key, window)
+		if _, err := pipe.Exec(ctx); err != nil {
+			log.Printf("⚠️ Rate limiter Redis hatası: %v", err)
+			return c.Next()
+		}
+		count := incr.Val()
+		c.Set("X-RateLimit-Limit", fmt.Sprintf("%d", max))
+		c.Set("X-RateLimit-Remaining", fmt.Sprintf("%d", max-int(count)))
+		if count > int64(max) {
+			return c.Status(429).JSON(fiber.Map{"error": "Çok fazla istek gönderdiniz. Lütfen bekleyin."})
+		}
+		return c.Next()
+	}
+}
+
+// jwtMiddleware doğrulanmış Supabase JWT token'ını kontrol eder.
+// Token geçerliyse kullanıcı e-postasını c.Locals("user_email") ile ileri handler'lara taşır.
+func jwtMiddleware(c *fiber.Ctx) error {
+	authHeader := c.Get("Authorization")
+	if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
+		return c.Status(401).JSON(fiber.Map{"error": "Yetkilendirme başlığı eksik"})
+	}
+	tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
+
+	if supabasePublicKey == nil {
+		log.Println("⚠️ Supabase public key yüklenmemiş, JWT doğrulaması atlanıyor!")
+		return c.Next()
 	}
 
-	client := resend.NewClient(apiKey)
+	token, err := jwtv4.Parse(tokenStr, func(token *jwtv4.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwtv4.SigningMethodECDSA); !ok {
+			return nil, fmt.Errorf("beklenmedik imzalama yöntemi: %v", token.Header["alg"])
+		}
+		return supabasePublicKey, nil
+	})
 
-	params := &resend.SendEmailRequest{
-		From:    "onboarding@resend.dev",
-		To:      []string{targetEmail},
-		Subject: "Siparişiniz Alındı! 🍲",
-		Html:    "<strong>Siparişiniz başarıyla alındı.</strong><br>Ödeme ID: " + paymentID + "<br>Afiyet olsun!",
+	if err != nil || !token.Valid {
+		log.Printf("❌ JWT doğrulama hatası: %v | token başı: %.20s...", err, tokenStr)
+		return c.Status(401).JSON(fiber.Map{"error": fmt.Sprintf("Geçersiz token: %v", err)})
 	}
 
-	sent, err := client.Emails.Send(params)
-	if err != nil {
-		log.Println("E-posta gönderim hatası:", err)
-		return
+	claims, ok := token.Claims.(jwtv4.MapClaims)
+	if !ok {
+		return c.Status(401).JSON(fiber.Map{"error": "Token claims okunamadı"})
 	}
-	log.Println("E-posta başarıyla gönderildi! ID:", sent.Id)
+
+	email, _ := claims["email"].(string)
+	c.Locals("user_email", email)
+	return c.Next()
 }
 
 func main() {
@@ -118,6 +201,29 @@ func main() {
 	err := godotenv.Load()
 	if err != nil {
 		log.Fatal(".env dosyası yüklenemedi!")
+	}
+
+	// Supabase JWKS (ES256 public key) yükle — başarısız olursa arka planda retry
+	if supabaseURL := os.Getenv("SUPABASE_URL"); supabaseURL != "" {
+		var jwksErr error
+		supabasePublicKey, jwksErr = fetchSupabaseJWKS(supabaseURL)
+		if jwksErr != nil {
+			log.Printf("⚠️ Supabase JWKS yüklenemedi: %v — 30 saniyede bir retry yapılacak", jwksErr)
+			go func() {
+				for {
+					time.Sleep(30 * time.Second)
+					key, err := fetchSupabaseJWKS(supabaseURL)
+					if err == nil {
+						supabasePublicKey = key
+						log.Println("✅ Supabase JWKS yüklendi (ES256) — retry başarılı")
+						return
+					}
+					log.Printf("⚠️ JWKS retry başarısız: %v", err)
+				}
+			}()
+		} else {
+			log.Println("✅ Supabase JWKS yüklendi (ES256)")
+		}
 	}
 
 	// 1. Veritabanına Bağlan (Environment variable'dan al)
@@ -183,6 +289,12 @@ func main() {
 	);`)
 	db.Exec("ALTER TABLE packages ADD COLUMN IF NOT EXISTS category VARCHAR(100) DEFAULT 'Diğer';")
 	db.Exec("ALTER TABLE packages ADD COLUMN IF NOT EXISTS tags JSONB DEFAULT '[]';")
+	db.Exec("ALTER TABLE businesses ADD COLUMN IF NOT EXISTS logo_url TEXT DEFAULT '';")
+	db.Exec("ALTER TABLE businesses ADD COLUMN IF NOT EXISTS category VARCHAR(100) DEFAULT '';")
+	db.Exec("ALTER TABLE businesses ADD COLUMN IF NOT EXISTS description TEXT DEFAULT '';")
+	db.Exec("ALTER TABLE businesses ADD COLUMN IF NOT EXISTS phone VARCHAR(50) DEFAULT '';")
+	db.Exec("ALTER TABLE businesses ADD COLUMN IF NOT EXISTS website TEXT DEFAULT '';")
+	db.Exec("ALTER TABLE businesses ADD COLUMN IF NOT EXISTS email VARCHAR(255) DEFAULT '';")
 
 	// E. Siparişler (Orders)
 	db.Exec(`CREATE TABLE IF NOT EXISTS orders (
@@ -195,6 +307,20 @@ func main() {
 	);`)
 	db.Exec("ALTER TABLE orders ADD COLUMN IF NOT EXISTS buyer_email VARCHAR(255);")
 	db.Exec("ALTER TABLE orders ALTER COLUMN status TYPE VARCHAR(50);")
+	// 2.1: Snapshot & tracking columns
+	db.Exec("ALTER TABLE orders ADD COLUMN IF NOT EXISTS total_price DECIMAL(10,2);")
+	db.Exec("ALTER TABLE orders ADD COLUMN IF NOT EXISTS package_name VARCHAR(255);")
+	db.Exec("ALTER TABLE orders ADD COLUMN IF NOT EXISTS package_image_url TEXT;")
+	db.Exec("ALTER TABLE orders ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;")
+
+	// 2.3: Performance indexes
+	// Geçerli sipariş durumu sırası: 'Ödendi' → 'Hazırlanıyor' → 'Teslim Edilmeyi Bekliyor' → 'Teslim Edildi'
+	//                                 'Ödendi' → 'İptal Edildi'  (5 dakika içinde)
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_orders_buyer_email ON orders(buyer_email);")
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);")
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_orders_created_at ON orders(created_at DESC);")
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_packages_is_active ON packages(is_active) WHERE is_active = true;")
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_device_tokens_email ON device_tokens(user_email);")
 
 	// F. Sipariş Durum Geçmişi (Order Status History)
 	db.Exec(`CREATE TABLE IF NOT EXISTS order_status_history (
@@ -279,14 +405,23 @@ func main() {
 	app.Use(logger.New())
 
 	// CORS Ayarı (Web ve Mobil'in API'ye erişebilmesi için)
+	corsOrigins := os.Getenv("CORS_ORIGINS")
+	if corsOrigins == "" {
+		corsOrigins = "*"
+	}
 	app.Use(cors.New(cors.Config{
-		AllowOrigins: "*",
+		AllowOrigins: corsOrigins,
 		AllowMethods: "GET,POST,HEAD,PUT,DELETE,PATCH,OPTIONS",
 		AllowHeaders: "Origin, Content-Type, Accept, Authorization",
 	}))
 
 	// API Rotası: İşletme Konumunu Kaydet/Güncelle
-	app.Post("/api/v1/business/location", func(c *fiber.Ctx) error {
+	app.Post("/api/v1/business/location", jwtMiddleware, func(c *fiber.Ctx) error {
+		ownerEmail := c.Locals("user_email").(string)
+		var businessID string
+		if err := db.QueryRow("SELECT id FROM businesses WHERE owner_email = $1", ownerEmail).Scan(&businessID); err != nil {
+			return c.Status(403).JSON(fiber.Map{"error": "Bu hesaba bağlı işletme bulunamadı"})
+		}
 		type LocationRequest struct {
 			Name      string  `json:"name"`
 			Latitude  float64 `json:"latitude"`
@@ -308,7 +443,7 @@ func main() {
 				latitude = EXCLUDED.latitude,
 				longitude = EXCLUDED.longitude,
 				updated_at = EXCLUDED.updated_at`,
-			"business-123", req.Name, req.Latitude, req.Longitude, time.Now())
+			businessID, req.Name, req.Latitude, req.Longitude, time.Now())
 		if err != nil {
 			log.Println("Konum kaydetme hatası:", err)
 			return c.Status(500).JSON(fiber.Map{"error": "Konum kaydedilemedi"})
@@ -317,20 +452,26 @@ func main() {
 		return c.JSON(fiber.Map{"message": "Konum kaydedildi ✅", "latitude": req.Latitude, "longitude": req.Longitude})
 	})
 
-	// API Rotası: İşletmenin Kayıtlı Konumunu Çek
-	app.Get("/api/v1/business/location", func(c *fiber.Ctx) error {
+	// API Rotası: İşletmenin Kayıtlı Konumunu Çek (JWT ile owner'a göre)
+	app.Get("/api/v1/business/location", jwtMiddleware, func(c *fiber.Ctx) error {
+		ownerEmail := c.Locals("user_email").(string)
 		var name string
 		var lat, lon float64
-		err := db.QueryRow(`SELECT name, latitude, longitude FROM businesses WHERE id = $1`, "business-123").Scan(&name, &lat, &lon)
+		err := db.QueryRow(`SELECT name, latitude, longitude FROM businesses WHERE owner_email = $1`, ownerEmail).Scan(&name, &lat, &lon)
 		if err != nil {
-			// Kayıt yoksa boş dön (henüz kaydedilmemiş)
 			return c.JSON(fiber.Map{"name": "", "latitude": 0, "longitude": 0})
 		}
 		return c.JSON(fiber.Map{"name": name, "latitude": lat, "longitude": lon})
 	})
 
 	// 4. API Rotasını Tanımla (İşletme Paket Ekler)
-	app.Post("/api/v1/business/packages", func(c *fiber.Ctx) error {
+	app.Post("/api/v1/business/packages", rateLimiter(30, time.Hour), jwtMiddleware, func(c *fiber.Ctx) error {
+		ownerEmail := c.Locals("user_email").(string)
+		var businessID string
+		if err := db.QueryRow("SELECT id FROM businesses WHERE owner_email = $1", ownerEmail).Scan(&businessID); err != nil {
+			return c.Status(403).JSON(fiber.Map{"error": "Bu hesaba bağlı işletme bulunamadı"})
+		}
+
 		var dto domain.CreatePackageDTO
 
 		// Gelen JSON verisini DTO'ya dönüştür
@@ -344,7 +485,7 @@ func main() {
 		if dto.Latitude == 0 || dto.Longitude == 0 {
 			var bizLat, bizLon float64
 			var bizName string
-			dbErr := db.QueryRow(`SELECT name, latitude, longitude FROM businesses WHERE id = $1`, "business-123").
+			dbErr := db.QueryRow(`SELECT name, latitude, longitude FROM businesses WHERE id = $1`, businessID).
 				Scan(&bizName, &bizLat, &bizLon)
 			if dbErr == nil && (bizLat != 0 || bizLon != 0) {
 				dto.Latitude = bizLat
@@ -370,7 +511,7 @@ func main() {
 		// Veritabanı modelini (Entity) oluştur
 		pkg := domain.Package{
 			ID:              uuid.New().String(),
-			BusinessID:      "business-123", // Şimdilik MVP için sabit bir işletme hesabı
+			BusinessID:      businessID,
 			BusinessName:    dto.BusinessName,
 			Latitude:        dto.Latitude,
 			Longitude:       dto.Longitude,
@@ -388,10 +529,12 @@ func main() {
 
 		// V2 Mimarisi İçin Insert:
 		insertQuery := `
-			INSERT INTO packages (id, business_id, name, description, original_price, discounted_price, stock, is_active, created_at, image_url, category, tags)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`
+			INSERT INTO packages (id, business_id, name, description, original_price, discounted_price, stock, is_active, created_at, image_url, category, tags, available_from, available_until)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`
 
-		_, err := db.Exec(insertQuery, pkg.ID, pkg.BusinessID, pkg.Name, pkg.Description, pkg.OriginalPrice, pkg.DiscountedPrice, pkg.Stock, pkg.IsActive, pkg.CreatedAt, pkg.ImageUrl, pkg.Category, tagsJSON)
+		availFrom := sql.NullString{String: dto.AvailableFrom, Valid: dto.AvailableFrom != ""}
+		availUntil := sql.NullString{String: dto.AvailableUntil, Valid: dto.AvailableUntil != ""}
+		_, err := db.Exec(insertQuery, pkg.ID, pkg.BusinessID, pkg.Name, pkg.Description, pkg.OriginalPrice, pkg.DiscountedPrice, pkg.Stock, pkg.IsActive, pkg.CreatedAt, pkg.ImageUrl, pkg.Category, tagsJSON, availFrom, availUntil)
 		if err != nil {
 			log.Println("Kaydetme hatası:", err)
 			return c.Status(500).JSON(fiber.Map{"error": "Paket kaydedilemedi"})
@@ -407,12 +550,60 @@ func main() {
 		return c.Status(201).JSON(pkg)
 	})
 
+	// API Rotası 2b: İşletmenin Kendi Paketlerini Listele (Dashboard)
+	app.Get("/api/v1/business/packages", jwtMiddleware, func(c *fiber.Ctx) error {
+		ownerEmail := c.Locals("user_email").(string)
+		var businessID string
+		if err := db.QueryRow("SELECT id FROM businesses WHERE owner_email = $1", ownerEmail).Scan(&businessID); err != nil {
+			return c.Status(403).JSON(fiber.Map{"error": "Bu hesaba bağlı işletme bulunamadı"})
+		}
+
+		rows, err := db.Query(`
+			SELECT id, name, description, original_price, discounted_price, stock, is_active, image_url, category, created_at
+			FROM packages
+			WHERE business_id = $1
+			ORDER BY created_at DESC`, businessID)
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Paketler getirilemedi"})
+		}
+		defer rows.Close()
+
+		type PkgRow struct {
+			ID              string    `json:"id"`
+			Name            string    `json:"name"`
+			Description     string    `json:"description"`
+			OriginalPrice   float64   `json:"original_price"`
+			DiscountedPrice float64   `json:"discounted_price"`
+			Stock           int       `json:"stock"`
+			IsActive        bool      `json:"is_active"`
+			ImageUrl        string    `json:"image_url"`
+			Category        string    `json:"category"`
+			CreatedAt       time.Time `json:"created_at"`
+		}
+		pkgs := []PkgRow{}
+		for rows.Next() {
+			var p PkgRow
+			var imgUrl sql.NullString
+			if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.OriginalPrice, &p.DiscountedPrice, &p.Stock, &p.IsActive, &imgUrl, &p.Category, &p.CreatedAt); err != nil {
+				continue
+			}
+			if imgUrl.Valid {
+				p.ImageUrl = imgUrl.String
+			}
+			pkgs = append(pkgs, p)
+		}
+		return c.JSON(pkgs)
+	})
+
 	// API Rotası 2: Tüm Aktif Paketleri Listele (Kullanıcılar İçin - Konum Bazlı Filtrelenebilir)
 	app.Get("/api/v1/packages", func(c *fiber.Ctx) error {
 		// Konum parametrelerini al
 		latStr := c.Query("lat")
 		lonStr := c.Query("lon")
 		radiusStr := c.Query("radius", "10") // Varsayılan 10 km
+		bizFilter := c.Query("business_id")  // İsteğe bağlı işletme filtresi
+		searchQ := c.Query("q")              // Kelime araması (paket adı / açıklama)
+		catFilter := c.Query("category")     // Kategori filtresi
 
 		var query string
 		var rows *sql.Rows
@@ -428,11 +619,17 @@ func main() {
 			}
 
 			// Haversine Formülü — packages ve businesses JOIN işlemi
+			bizClause := ""
+			if bizFilter != "" {
+				bizClause = " AND p.business_id = '" + strings.ReplaceAll(bizFilter, "'", "") + "'"
+			}
 			query = `
 				SELECT * FROM (
 					SELECT
 						p.id, p.business_id, b.name as business_name, b.latitude, b.longitude, p.name,
 						p.description, p.original_price, p.discounted_price, p.stock, p.is_active, p.image_url, p.category, p.tags,
+						COALESCE(p.available_from::text, '') AS available_from,
+						COALESCE(p.available_until::text, '') AS available_until,
 						6371 * acos(
 							LEAST(1.0,
 								COS(RADIANS($1)) * COS(RADIANS(b.latitude)) *
@@ -443,18 +640,45 @@ func main() {
 					FROM packages p
 					JOIN businesses b ON p.business_id = b.id
 					WHERE p.is_active = true AND b.latitude != 0 AND b.longitude != 0
+					  AND (p.available_from IS NULL OR p.available_until IS NULL
+					       OR (CURRENT_TIME AT TIME ZONE 'Europe/Istanbul') BETWEEN p.available_from AND p.available_until)
+					  AND ($4 = '' OR p.name ILIKE '%' || $4 || '%' OR p.description ILIKE '%' || $4 || '%')
+					  AND ($5 = '' OR p.category = $5)` + bizClause + `
 				) AS results
 				WHERE results.distance_km <= $3
 				ORDER BY results.distance_km ASC`
-			rows, err = db.Query(query, lat, lon, radius)
+			rows, err = db.Query(query, lat, lon, radius, searchQ, catFilter)
 		} else {
 			// Konum yoksa tüm aktif paketleri getir
-			query = `
-				SELECT p.id, p.business_id, b.name as business_name, b.latitude, b.longitude, p.name, p.description, p.original_price, p.discounted_price, p.stock, p.is_active, p.image_url, p.category, p.tags, 0 AS distance_km 
-				FROM packages p
-				JOIN businesses b ON p.business_id = b.id
-				WHERE p.is_active = true`
-			rows, err = db.Query(query)
+			if bizFilter != "" {
+				query = `
+					SELECT p.id, p.business_id, b.name as business_name, b.latitude, b.longitude, p.name, p.description, p.original_price, p.discounted_price, p.stock, p.is_active, p.image_url, p.category, p.tags,
+					  COALESCE(p.available_from::text, '') AS available_from,
+					  COALESCE(p.available_until::text, '') AS available_until,
+					  0 AS distance_km
+					FROM packages p
+					JOIN businesses b ON p.business_id = b.id
+					WHERE p.is_active = true AND p.business_id = $1
+					  AND (p.available_from IS NULL OR p.available_until IS NULL
+					       OR (CURRENT_TIME AT TIME ZONE 'Europe/Istanbul') BETWEEN p.available_from AND p.available_until)
+					  AND ($2 = '' OR p.name ILIKE '%' || $2 || '%' OR p.description ILIKE '%' || $2 || '%')
+					  AND ($3 = '' OR p.category = $3)`
+				rows, err = db.Query(query, bizFilter, searchQ, catFilter)
+			} else {
+				query = `
+					SELECT p.id, p.business_id, b.name as business_name, b.latitude, b.longitude, p.name, p.description, p.original_price, p.discounted_price, p.stock, p.is_active, p.image_url, p.category, p.tags,
+					  COALESCE(p.available_from::text, '') AS available_from,
+					  COALESCE(p.available_until::text, '') AS available_until,
+					  0 AS distance_km
+					FROM packages p
+					JOIN businesses b ON p.business_id = b.id
+					WHERE p.is_active = true
+					  AND (p.available_from IS NULL OR p.available_until IS NULL
+					       OR (CURRENT_TIME AT TIME ZONE 'Europe/Istanbul') BETWEEN p.available_from AND p.available_until)
+					  AND ($1 = '' OR p.name ILIKE '%' || $1 || '%' OR p.description ILIKE '%' || $1 || '%')
+					  AND ($2 = '' OR p.category = $2)`
+				rows, err = db.Query(query, searchQ, catFilter)
+			}
 		}
 
 		if err != nil {
@@ -467,7 +691,7 @@ func main() {
 		for rows.Next() {
 			var p domain.Package
 			var tagsStr string
-			if err := rows.Scan(&p.ID, &p.BusinessID, &p.BusinessName, &p.Latitude, &p.Longitude, &p.Name, &p.Description, &p.OriginalPrice, &p.DiscountedPrice, &p.Stock, &p.IsActive, &p.ImageUrl, &p.Category, &tagsStr, &p.DistanceKm); err != nil {
+			if err := rows.Scan(&p.ID, &p.BusinessID, &p.BusinessName, &p.Latitude, &p.Longitude, &p.Name, &p.Description, &p.OriginalPrice, &p.DiscountedPrice, &p.Stock, &p.IsActive, &p.ImageUrl, &p.Category, &tagsStr, &p.AvailableFrom, &p.AvailableUntil, &p.DistanceKm); err != nil {
 				log.Println("Satır okuma hatası:", err)
 				continue
 			}
@@ -483,53 +707,22 @@ func main() {
 		return c.JSON(packages)
 	})
 
-	// API Rotası 3: Sipariş Ver (Kullanıcı İçin)
-	app.Post("/api/v1/orders", func(c *fiber.Ctx) error {
-		type OrderRequest struct {
-			PackageID  string `json:"package_id"`
-			BuyerEmail string `json:"buyer_email"`
-		}
-		var req OrderRequest
-		if err := c.BodyParser(&req); err != nil {
-			return c.Status(400).JSON(fiber.Map{"error": "Geçersiz istek"})
-		}
-
-		if req.BuyerEmail == "" {
-			req.BuyerEmail = "bilinmeyen@kullanici.com" // Fallback in case old client hits API
-		}
-
-		// 1. Stok kontrolü yap ve stoğu 1 azalt
-		res, err := db.Exec("UPDATE packages SET stock = stock - 1 WHERE id = $1 AND stock > 0", req.PackageID)
-		if err != nil {
-			return c.Status(500).JSON(fiber.Map{"error": "Stok güncellenemedi"})
-		}
-
-		rowsAffected, _ := res.RowsAffected()
-		if rowsAffected == 0 {
-			return c.Status(400).JSON(fiber.Map{"error": "Üzgünüz, ürün tükendi!"})
-		}
-
-		// 2. Sipariş kaydı oluştur
-		orderID := uuid.New().String()
-		_, err = db.Exec("INSERT INTO orders (id, package_id, user_id, buyer_email, status, created_at) VALUES ($1, $2, $3, $4, $5, $6)",
-			orderID, req.PackageID, "user-456", req.BuyerEmail, "Hazırlanıyor", time.Now())
-
-		// (V2) Durum Geçmişini Kaydet
-		db.Exec("INSERT INTO order_status_history (order_id, status, changed_at) VALUES ($1, $2, $3)", orderID, "Hazırlanıyor", time.Now())
-
-		return c.Status(201).JSON(fiber.Map{"message": "Sipariş başarıyla alındı!", "order_id": orderID})
-	})
-
 	// API Rotası 4: İşletme İçin Gelen Siparişleri Listele
-	app.Get("/api/v1/business/orders", func(c *fiber.Ctx) error {
-		// Bu sorgu hem sipariş bilgilerini hem de hangi paketin satıldığını getirir (JOIN)
+	app.Get("/api/v1/business/orders", jwtMiddleware, func(c *fiber.Ctx) error {
+		ownerEmail := c.Locals("user_email").(string)
+		var businessID string
+		if err := db.QueryRow("SELECT id FROM businesses WHERE owner_email = $1", ownerEmail).Scan(&businessID); err != nil {
+			return c.Status(403).JSON(fiber.Map{"error": "Bu hesaba bağlı işletme bulunamadı"})
+		}
+
 		query := `
 			SELECT o.id, p.name, o.buyer_email, o.status, o.created_at 
 			FROM orders o 
 			JOIN packages p ON o.package_id = p.id 
+			WHERE p.business_id = $1
 			ORDER BY o.created_at DESC`
 
-		rows, err := db.Query(query)
+		rows, err := db.Query(query, businessID)
 		if err != nil {
 			return c.Status(500).JSON(fiber.Map{"error": "Siparişler getirilemedi"})
 		}
@@ -572,23 +765,24 @@ func main() {
 		supabaseURL := os.Getenv("SUPABASE_URL") + "/auth/v1/token?grant_type=password"
 		req, _ := http.NewRequest("POST", supabaseURL, bytes.NewBuffer(body))
 
-		req.Header.Set("apikey", os.Getenv("SUPABASE_ANON_KEY"))
+		anonKey := os.Getenv("SUPABASE_ANON_KEY")
+		req.Header.Set("apikey", anonKey)
+		req.Header.Set("Authorization", "Bearer "+anonKey)
 		req.Header.Set("Content-Type", "application/json")
 
 		client := &http.Client{}
 		resp, err := client.Do(req)
 		if err != nil {
+			log.Printf("Supabase Request Error: %v", err)
 			return c.Status(500).JSON(fiber.Map{"error": "Supabase bağlantı hatası"})
 		}
 		defer resp.Body.Close()
 
-		// 3. Yanıtı oku ve geri dön
-		var result map[string]interface{}
 		bodyBytes, _ := io.ReadAll(resp.Body)
+		var result map[string]interface{}
 		json.Unmarshal(bodyBytes, &result)
 
 		log.Printf("Supabase Response [%d]: %s", resp.StatusCode, string(bodyBytes))
-
 		return c.Status(resp.StatusCode).JSON(result)
 	})
 
@@ -598,18 +792,22 @@ func main() {
 		supabaseURL := os.Getenv("SUPABASE_URL") + "/auth/v1/signup"
 		req, _ := http.NewRequest("POST", supabaseURL, bytes.NewBuffer(body))
 
-		req.Header.Set("apikey", os.Getenv("SUPABASE_ANON_KEY"))
+		anonKey := os.Getenv("SUPABASE_ANON_KEY")
+		req.Header.Set("apikey", anonKey)
+		req.Header.Set("Authorization", "Bearer "+anonKey)
 		req.Header.Set("Content-Type", "application/json")
 
 		client := &http.Client{}
 		resp, err := client.Do(req)
 		if err != nil {
+			log.Printf("Supabase Signup Error: %v", err)
 			return c.Status(500).JSON(fiber.Map{"error": "Supabase bağlantı hatası"})
 		}
 		defer resp.Body.Close()
 
+		bodyBytes, _ := io.ReadAll(resp.Body)
 		var result map[string]interface{}
-		json.NewDecoder(resp.Body).Decode(&result)
+		json.Unmarshal(bodyBytes, &result)
 		return c.Status(resp.StatusCode).JSON(result)
 	})
 
@@ -644,264 +842,88 @@ func main() {
 		bodyBytes, _ := json.Marshal(reqData)
 		req, _ := http.NewRequest("POST", supabaseURL, bytes.NewBuffer(bodyBytes))
 
-		req.Header.Set("apikey", os.Getenv("SUPABASE_ANON_KEY"))
+		anonKey := os.Getenv("SUPABASE_ANON_KEY")
+		req.Header.Set("apikey", anonKey)
+		req.Header.Set("Authorization", "Bearer "+anonKey)
 		req.Header.Set("Content-Type", "application/json")
 
 		client := &http.Client{}
 		resp, err := client.Do(req)
 		if err != nil {
+			log.Printf("Supabase OTP Error: %v", err)
 			return c.Status(500).JSON(fiber.Map{"error": "Supabase bağlantı hatası"})
 		}
 		defer resp.Body.Close()
 
+		resBytes, _ := io.ReadAll(resp.Body)
 		var result map[string]interface{}
-		json.NewDecoder(resp.Body).Decode(&result)
+		json.Unmarshal(resBytes, &result)
 		return c.Status(resp.StatusCode).JSON(result)
 	})
 
-	// API Rotası 8: Iyzico Ödeme Başlat (Checkout Form)
-	app.Post("/api/v1/payments/initialize", func(c *fiber.Ctx) error {
-		type PaymentRequest struct {
-			PackageID string `json:"package_id"`
-			Price     string `json:"price"`
-			Email     string `json:"email"`
-			Name      string `json:"name"`
-			Surname   string `json:"surname"`
-		}
-		var reqData PaymentRequest
-		if err := c.BodyParser(&reqData); err != nil {
-			return c.Status(400).JSON(fiber.Map{"error": "Geçersiz istek"})
-		}
-
-		// 1. Iyzico İstemci Ayarları (.env'den çekiliyor)
-		apiKey := os.Getenv("IYZICO_API_KEY")
-		secretKey := os.Getenv("IYZICO_SECRET_KEY")
-
-		client, err := iyzipay.New(apiKey, secretKey)
-		if err != nil {
-			return c.Status(500).JSON(fiber.Map{"error": "Iyzico client oluşturulamadı"})
-		}
-
-		// 2. Ödeme Formu İsteği Oluştur
-		req := &iyzipay.CFRequest{
-			InitPWIRequest: iyzipay.InitPWIRequest{
-				Locale:              "tr",
-				ConversationID:      uuid.New().String(),
-				Price:               reqData.Price,
-				BasketId:            "B" + uuid.New().String()[0:8],
-				PaymentGroup:        "PRODUCT",
-				CallbackUrl:         "https://www.google.com/yemekhane_callback", // Android'in SSL (net_error -202) hatasından (ve Iyzico `httpsurl` doğrulamasından) kaçmak için güvenli temsili Google SSL adresi.
-				Currency:            "TRY",
-				PaidPrice:           reqData.Price, // İndirim yoksa Price ile aynı
-				EnabledInstallments: []string{"1", "2", "3", "6", "9"},
-				Buyer: iyzipay.Buyer{
-					ID:                  "BY123",
-					Name:                reqData.Name,
-					Surname:             reqData.Surname,
-					GSMNumber:           "+905350000000",
-					Email:               reqData.Email,
-					IdentityNumber:      "74300864791",
-					RegistrationAddress: "Nidakule Göztepe, Merdivenköy Mah. Bora Sok. No:1",
-					IP:                  "85.34.78.112",
-					City:                "Istanbul",
-					Country:             "Turkey",
-				},
-				ShippingAddress: iyzipay.ShippingAddress{
-					ContactName: reqData.Name + " " + reqData.Surname,
-					City:        "Istanbul",
-					Country:     "Turkey",
-					Address:     "Nidakule Göztepe, Merdivenköy Mah. Bora Sok. No:1",
-				},
-				BillingAddress: iyzipay.BillingAddress{
-					ContactName: reqData.Name + " " + reqData.Surname,
-					City:        "Istanbul",
-					Country:     "Turkey",
-					Address:     "Nidakule Göztepe, Merdivenköy Mah. Bora Sok. No:1",
-				},
-				BasketItems: []iyzipay.BasketItem{
-					{
-						ID:        reqData.PackageID,
-						Name:      "Yemek Paketi",
-						Category1: "Food",
-						ItemType:  "PHYSICAL",
-						Price:     reqData.Price,
-					},
-				},
-			},
-			// PaymentSource kaldırıldı — sandbox'ta kısıtlamalara yol açıyordu
-		}
-
-		// 6. Iyzico'ya İsteği Gönder
-		reqBytes, _ := json.MarshalIndent(req, "", "  ")
-		log.Printf("Iyzico'ya giden istek: %s", string(reqBytes))
-
-		res, err := client.CheckoutFormPaymentRequest(req, "iframe") // "iframe" SDK bug'ını aşmak için zorunludur.
-		if err != nil {
-			log.Printf("❌ Iyzico API isteği hata fırlattı: %v", err)
-			return c.Status(500).JSON(fiber.Map{"error": "Iyzico bağlantı hatası: " + err.Error()})
-		}
-
-		resBytes, _ := json.Marshal(res)
-		log.Printf("Iyzico'dan dönen cevap: %s", string(resBytes))
-
-		if res.Status != "success" {
-			log.Printf("❌ Iyzico başlatma başarısız: %s", string(resBytes))
-			// we don't have ErrorMessage field exposed safely, let's just send the status string
-			return c.Status(500).JSON(fiber.Map{"error": "Iyzico: " + res.Status})
-		}
-
-		return c.JSON(res)
-	})
-	// API Rotası 8.4: Iyzico Gerçek Webhook Callback (Iyzico 3D Onayı Sonrası Kendi Sunucularından İstek Atar)
-	app.Post("/api/v1/payments/iyzico-callback", func(c *fiber.Ctx) error {
-		// Iyzico'nun POST isteği attığı yer burası. 200 OK dönmezsek 3D işlemi iptal olur (mdStatus:0)
-		log.Println("⚡ Iyzico'dan Webhook Geldi: Payment Callback!")
-		// İçeriği okuyup detayları görebiliriz:
-		log.Println("Webhook Body:", string(c.Body()))
-
-		// Iyzico'ya "aldım tamam" diyoruz, işlemi onaylıyor
-		return c.SendStatus(200)
-	})
-
-	// API Rotası 8.5: Iyzico Ödeme Durumu Manuel Kontrol (Mobil WebView kapandığında çağrılır)
-	app.Post("/api/v1/payments/check", func(c *fiber.Ctx) error {
-		type CheckRequest struct {
-			Token      string `json:"token"`
+	// API Rotası 8: Direkt Sipariş Oluştur (Ödeme yüz yüze)
+	app.Post("/api/v1/orders", rateLimiter(10, time.Minute), jwtMiddleware, func(c *fiber.Ctx) error {
+		type OrderRequest struct {
 			PackageID  string `json:"package_id"`
 			BuyerEmail string `json:"buyer_email"`
 		}
-		var req CheckRequest
+		var req OrderRequest
 		if err := c.BodyParser(&req); err != nil {
-			log.Printf("❌ BodyParser Hatası: %v", err)
 			return c.Status(400).JSON(fiber.Map{"error": "Geçersiz istek"})
 		}
-
-		if req.Token == "" {
-			log.Println("❌ Token bulunamadı isteğin içinde")
-			return c.Status(400).JSON(fiber.Map{"error": "Token bulunamadı"})
+		userEmail, _ := c.Locals("user_email").(string)
+		if userEmail == "" {
+			userEmail = req.BuyerEmail
+		}
+		if req.PackageID == "" {
+			return c.Status(400).JSON(fiber.Map{"error": "package_id gerekli"})
 		}
 
-		apiKey := os.Getenv("IYZICO_API_KEY")
-		secretKey := os.Getenv("IYZICO_SECRET_KEY")
+		tx, txErr := db.Begin()
+		if txErr != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Sipariş oluşturulamadı"})
+		}
 
-		client, err := iyzipay.New(apiKey, secretKey)
+		res, err := tx.Exec("UPDATE packages SET stock = stock - 1 WHERE id = $1 AND stock > 0", req.PackageID)
 		if err != nil {
-			log.Printf("❌ Iyzico client oluşturma hatası: %v", err)
-			return c.Status(500).JSON(fiber.Map{"error": "Iyzico client oluşturulamadı"})
+			tx.Rollback()
+			return c.Status(500).JSON(fiber.Map{"error": "Stok güncellenemedi"})
+		}
+		rowsAffected, _ := res.RowsAffected()
+		if rowsAffected == 0 {
+			tx.Rollback()
+			return c.Status(409).JSON(fiber.Map{"error": "Üzgünüz, ürün tükendi!"})
 		}
 
-		inquiryReq := &iyzipay.CFInquiryRequest{
-			Locale:         "tr",
-			Token:          req.Token,
-			ConversationId: "123456789",
+		orderID := uuid.New().String()
+		_, dbErr := tx.Exec(`
+			INSERT INTO orders (id, package_id, user_id, buyer_email, status, created_at,
+				total_price, package_name, package_image_url)
+			SELECT $1, $2, $3, $4, $5, $6,
+				discounted_price, name, image_url
+			FROM packages WHERE id = $2`,
+			orderID, req.PackageID, userEmail, userEmail, "Sipariş Alındı", time.Now())
+		if dbErr != nil {
+			tx.Rollback()
+			log.Println("❌ Sipariş oluşturma hatası:", dbErr)
+			return c.Status(500).JSON(fiber.Map{"error": "Sipariş kaydedilemedi"})
 		}
 
-		inquiryResp, err := client.CheckoutFormPaymentInquiryRequest(inquiryReq)
-		if err != nil {
-			log.Printf("❌ Iyzico CheckoutFormPaymentInquiryRequest Hatası: %v", err)
-			// Return 400 instead of 500 when inquiry fails (often due to expired tokens)
-			return c.Status(400).JSON(fiber.Map{"error": "Ödeme sorgulanırken hata oluştu!"})
+		if commitErr := tx.Commit(); commitErr != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Sipariş tamamlanamadı"})
 		}
 
-		rawInquiry, _ := json.Marshal(inquiryResp)
-		log.Printf("🔍 Iyzico Inquiry Status: %s, PaymentStatus: %s\n RAW DUMP: %s", inquiryResp.Status, inquiryResp.PaymentStatus, string(rawInquiry))
+		go sendFCMToEmail(db, userEmail,
+			"Siparişiniz Alındı! 🎉",
+			"Siparişiniz işleme alındı. Ödemeyi teslimatta yapabilirsiniz.",
+		)
 
-		if inquiryResp.Status == "success" && inquiryResp.PaymentStatus == "SUCCESS" {
-			log.Printf("✅ Ödeme Manuel Teyit Edildi! PaymentID: %s\n", inquiryResp.PaymentID)
-
-			if req.PackageID != "" && req.BuyerEmail != "" {
-				// 1. Stok Düş
-				res, err := db.Exec("UPDATE packages SET stock = stock - 1 WHERE id = $1 AND stock > 0", req.PackageID)
-				if err != nil {
-					log.Printf("❌ Veritabanı stok güncelleme hatası: %v", err)
-				} else {
-					rowsAffected, _ := res.RowsAffected()
-					if rowsAffected == 0 {
-						log.Printf("⚠️ Uyarı: Ödeme yapıldı ama stokta kalmamış! PackageID: %s", req.PackageID)
-					}
-				}
-
-				// 2. Sipariş Oluştur (Artık doğrudan Ödendi olarak yazıyoruz)
-				orderID := uuid.New().String()
-				_, dbErr := db.Exec("INSERT INTO orders (id, package_id, user_id, buyer_email, status, created_at) VALUES ($1, $2, $3, $4, $5, $6)",
-					orderID, req.PackageID, "user-456", req.BuyerEmail, "Ödendi", time.Now())
-				if dbErr != nil {
-					log.Println("❌ Sipariş oluşturma hatası:", dbErr)
-				}
-			} else {
-				log.Println("⚠️ Uyarı: Ödeme başarılı ancak PackageID veya BuyerEmail eksik olduğu için sipariş kaydedilemedi.")
-			}
-
-			// E-posta gönderimi SADECE başarılı olduğunda çalışmalı
-			log.Println("✉️ Resend e-posta gönderimi tetikleniyor...")
-			sendSuccessEmail(req.BuyerEmail, inquiryResp.PaymentID)
-
-			return c.JSON(fiber.Map{"status": "success", "message": "Ödeme başarılı! Sipariş onaylandı."})
-		}
-
-		return c.Status(400).JSON(fiber.Map{"status": "error", "message": "Ödeme başarısız veya tamamlanmadı."})
-	})
-
-	// API Rotası 9: Iyzico Ödeme Sonucu Callback
-	app.Post("/api/v1/payments/callback", func(c *fiber.Ctx) error {
-		// Iyzico POST isteği ile form verisi olarak 'token' gönderir
-		token := c.FormValue("token")
-		if token == "" {
-			return c.Status(400).JSON(fiber.Map{"error": "Token bulunamadı"})
-		}
-
-		apiKey := os.Getenv("IYZICO_API_KEY")
-		secretKey := os.Getenv("IYZICO_SECRET_KEY")
-
-		client, err := iyzipay.New(apiKey, secretKey)
-		if err != nil {
-			return c.Status(500).JSON(fiber.Map{"error": "Iyzico client oluşturulamadı"})
-		}
-
-		// Ödeme sonucunu doğrulamak (Inquiry) için istek oluştur
-		inquiryReq := &iyzipay.CFInquiryRequest{
-			Locale:         "tr",
-			Token:          token,
-			ConversationId: "123456789", // İsteğe bağlı, güvenlik ve loglama için eklenebilir
-		}
-
-		inquiryResp, err := client.CheckoutFormPaymentInquiryRequest(inquiryReq)
-		if err != nil {
-			log.Println("Ödeme sorgulama hatası:", err)
-			return c.Redirect("http://localhost:3000/payment/error", 302)
-		}
-
-		// Iyzico'dan dönen Status ve PaymentStatus'u kontrol et
-		if inquiryResp.Status == "success" && inquiryResp.PaymentStatus == "SUCCESS" {
-			log.Printf("🎉 Ödeme Başarılı! PaymentID: %s\n", inquiryResp.PaymentID)
-
-			// 1. Veritabanında sipariş durumunu "Ödendi" olarak güncelle
-			// BasketId içindeki sipariş ID'sini çekmeye çalışıyoruz (Bxxxxxxxx formatında yapmıştık)
-			// Gerçek senaryoda ConversationId veya basketId içine order_id gömeriz.
-			// Şimdilik en son bekleyen siparişi güncelle (MVP Mantığı)
-			_, dbErr := db.Exec("UPDATE orders SET status = 'Ödendi' WHERE status = 'Hazırlanıyor' AND user_id = 'user-456'")
-			if dbErr != nil {
-				log.Println("❌ Veritabanı güncelleme hatası:", dbErr)
-			}
-
-			// 2. Kullanıcıya E-posta Gönder (Resend)
-			// Iyzico inquiry response bu SDK'da Buyer bilgisini içermiyor.
-			// Gerçek senaryoda ConversationId ile DB'den çekilir.
-			targetEmail := "veliunusdu@gmail.com" // Şimdilik geliştirme amaçlı sabit
-			sendSuccessEmail(targetEmail, inquiryResp.PaymentID)
-
-			// Mobil uygulama WebView'ine "başarılı" mesajı gönderen bir URL'e yönlendir
-			return c.Redirect("https://app.yemekhane.com/payment/success", 302)
-		}
-
-		log.Printf("❌ Ödeme Başarısız veya İptal Edildi! Status: %s\n", inquiryResp.Status)
-		return c.Redirect("https://app.yemekhane.com/payment/error", 302)
+		log.Printf("🛒 Yeni sipariş: %s → paket: %s, alıcı: %s", orderID, req.PackageID, userEmail)
+		return c.Status(201).JSON(fiber.Map{"status": "success", "order_id": orderID})
 	})
 
 	// API Rotası 10: QR Okuma & Teslimat Onayı (Kantin Tarafı)
-	app.Post("/api/v1/delivery/confirm", func(c *fiber.Ctx) error {
-		// Normalde burada Admin JWT Authorization kontrolü yapılır.
-		// Şimdilik MVP için basit bir JSON "order_id" alıyoruz
+	app.Post("/api/v1/delivery/confirm", rateLimiter(10, time.Minute), jwtMiddleware, func(c *fiber.Ctx) error {
 		var req struct {
 			OrderID string `json:"order_id"`
 		}
@@ -928,12 +950,12 @@ func main() {
 		if status == "Teslim Edildi" {
 			return c.Status(400).JSON(fiber.Map{"error": "Bu paket zaten teslim alınmış/kullanılmış!"})
 		}
-		if status != "Ödendi" {
-			return c.Status(400).JSON(fiber.Map{"error": "Bu paketin ödemesi tamamlanmamış (Durum: " + status + ")"})
+		if status != "Ödendi" && status != "Teslim Edilmeyi Bekliyor" {
+			return c.Status(400).JSON(fiber.Map{"error": "Bu sipariş teslim için hazır değil (Durum: " + status + ")"})
 		}
 
 		// Sipariş Ödenmiş, şimdi "Teslim Edildi" yapıyoruz
-		_, updateErr := db.Exec("UPDATE orders SET status = 'Teslim Edildi' WHERE id = $1", req.OrderID)
+		_, updateErr := db.Exec("UPDATE orders SET status = 'Teslim Edildi', updated_at = NOW() WHERE id = $1", req.OrderID)
 		if updateErr != nil {
 			log.Println("❌ Teslimat güncelleme hatası:", updateErr)
 			return c.Status(500).JSON(fiber.Map{"error": "Teslimat onaylanırken sistemsel bir hata oluştu"})
@@ -942,64 +964,72 @@ func main() {
 		// (V2) Sipariş Durum Geçmişini Kaydet
 		db.Exec("INSERT INTO order_status_history (order_id, status, changed_at) VALUES ($1, $2, $3)", req.OrderID, "Teslim Edildi", time.Now())
 
+		// Sadakat puanı: teslimatta +10 puan + FCM bildirim
+		var buyerEmail string
+		if err := db.QueryRow("SELECT buyer_email FROM orders WHERE id = $1", req.OrderID).Scan(&buyerEmail); err == nil && buyerEmail != "" {
+			db.Exec("UPDATE users SET loyalty_points = COALESCE(loyalty_points, 0) + 10 WHERE email = $1", buyerEmail)
+			go sendFCMToEmail(db, buyerEmail,
+				"Siparişiniz Teslim Edildi! ✅",
+				"Afiyet olsun! +10 sadakat puanı kazandınız.",
+			)
+		}
+
 		log.Printf("✅ Sipariş başarıyla teslim edildi. Sipariş ID: %s", req.OrderID)
 		return c.Status(200).JSON(fiber.Map{"message": "Sipariş başarıyla teslim edildi ✅", "order_id": req.OrderID})
 	})
 
-	// API Rotası 11: Kullanıcının Siparişlerini Çekme (Flutter Siparişlerim UI Kullanır)
-	app.Get("/api/v1/orders/me", func(c *fiber.Ctx) error {
-		// Kullanıcının emailini query param'dan al
-		buyerEmail := c.Query("email")
-		if buyerEmail == "" {
-			return c.Status(400).JSON(fiber.Map{"error": "email parametresi gerekli"})
+	// API Rotası 10.1: Sipariş İptal Et (Kullanıcı — sadece "Ödendi" durumunda ve 5 dakika içinde)
+	app.Post("/api/v1/orders/:id/cancel", jwtMiddleware, func(c *fiber.Ctx) error {
+		orderID := c.Params("id")
+		if orderID == "" {
+			return c.Status(400).JSON(fiber.Map{"error": "Sipariş ID gerekli"})
 		}
 
-		rows, err := db.Query(`
-			SELECT o.id, o.package_id, p.name, o.status, o.created_at 
-			FROM orders o
-			LEFT JOIN packages p ON o.package_id = p.id
-			WHERE o.buyer_email = $1 
-			ORDER BY o.created_at DESC
-		`, buyerEmail)
-
+		var status string
+		var createdAt time.Time
+		err := db.QueryRow("SELECT status, created_at FROM orders WHERE id = $1", orderID).Scan(&status, &createdAt)
 		if err != nil {
-			log.Println("Siparişleri çekerken hata:", err)
-			return c.Status(500).JSON(fiber.Map{"error": "Siparişler getirilemedi"})
-		}
-		defer rows.Close()
-
-		var orders []map[string]interface{}
-		for rows.Next() {
-			var id, packageID, status string
-			var packageName sql.NullString
-			var createdAt time.Time
-			if err := rows.Scan(&id, &packageID, &packageName, &status, &createdAt); err != nil {
-				continue
-			}
-
-			pkgName := packageID // Fallback: paket silinmişse ID göster
-			if packageName.Valid && packageName.String != "" {
-				pkgName = packageName.String
-			}
-
-			orders = append(orders, map[string]interface{}{
-				"id":           id,
-				"package_id":   packageID,
-				"package_name": pkgName,
-				"status":       status,
-				"created_at":   createdAt,
-			})
+			return c.Status(404).JSON(fiber.Map{"error": "Sipariş bulunamadı"})
 		}
 
-		if orders == nil {
-			orders = []map[string]interface{}{} // null gitmesini önle
+		if status != "Ödendi" {
+			return c.Status(400).JSON(fiber.Map{"error": "Yalnızca 'Ödendi' durumundaki siparişler iptal edilebilir"})
 		}
 
-		return c.Status(200).JSON(orders)
+		if time.Since(createdAt) > 5*time.Minute {
+			return c.Status(400).JSON(fiber.Map{"error": "İptal süresi doldu (5 dakika geçti)"})
+		}
+
+		// Stoğu geri yükle
+		var packageID string
+		db.QueryRow("SELECT package_id FROM orders WHERE id = $1", orderID).Scan(&packageID)
+		if packageID != "" {
+			db.Exec("UPDATE packages SET stock = stock + 1 WHERE id = $1", packageID)
+		}
+
+		// Durumu güncelle
+		_, updateErr := db.Exec("UPDATE orders SET status = 'İptal Edildi', updated_at = NOW() WHERE id = $1", orderID)
+		if updateErr != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "İptal işlemi gerçekleştirilemedi"})
+		}
+
+		db.Exec("INSERT INTO order_status_history (order_id, status, changed_at) VALUES ($1, $2, $3)", orderID, "İptal Edildi", time.Now())
+
+		// FCM: alıcıya iptal bildirimi
+		var cancelBuyerEmail string
+		if err := db.QueryRow("SELECT buyer_email FROM orders WHERE id = $1", orderID).Scan(&cancelBuyerEmail); err == nil && cancelBuyerEmail != "" {
+			go sendFCMToEmail(db, cancelBuyerEmail,
+				"Siparişiniz İptal Edildi 🚫",
+				"Siparişiniz başarıyla iptal edildi. Ödemeniz iade sürecine alındı.",
+			)
+		}
+
+		log.Printf("🚫 Sipariş iptal edildi: %s", orderID)
+		return c.JSON(fiber.Map{"message": "Sipariş iptal edildi", "order_id": orderID})
 	})
 
 	// API Rotası 12: İşletme Sipariş Durumunu Güncelle (PATCH)
-	app.Patch("/api/v1/orders/:id/status", func(c *fiber.Ctx) error {
+	app.Patch("/api/v1/orders/:id/status", jwtMiddleware, func(c *fiber.Ctx) error {
 		orderID := c.Params("id")
 		if orderID == "" {
 			return c.Status(400).JSON(fiber.Map{"error": "Sipariş ID gerekli"})
@@ -1024,7 +1054,7 @@ func main() {
 			return c.Status(400).JSON(fiber.Map{"error": "Geçersiz durum: " + req.Status})
 		}
 
-		// Mevcut durumu kontrol et (Teslim Edilmiş siparişi geri çevirmeyi engelle)
+		// Mevcut durumu kontrol et (Teslim Edilmiş veya İptal Edilmiş siparişi geri çevirmeyi engelle)
 		var currentStatus string
 		err := db.QueryRow("SELECT status FROM orders WHERE id = $1", orderID).Scan(&currentStatus)
 		if err != nil {
@@ -1033,8 +1063,11 @@ func main() {
 		if currentStatus == "Teslim Edildi" {
 			return c.Status(400).JSON(fiber.Map{"error": "Teslim edilmiş siparişin durumu değiştirilemez"})
 		}
+		if currentStatus == "İptal Edildi" {
+			return c.Status(400).JSON(fiber.Map{"error": "İptal edilmiş siparişin durumu değiştirilemez"})
+		}
 
-		_, updateErr := db.Exec("UPDATE orders SET status = $1 WHERE id = $2", req.Status, orderID)
+		_, updateErr := db.Exec("UPDATE orders SET status = $1, updated_at = $3 WHERE id = $2", req.Status, orderID, time.Now())
 		if updateErr != nil {
 			log.Println("Durum güncelleme hatası:", updateErr)
 			return c.Status(500).JSON(fiber.Map{"error": "Durum güncellenemedi"})
@@ -1070,7 +1103,7 @@ func main() {
 	})
 
 	// API Rotası 13: FCM Token Kayıt (Flutter'dan tek seferlik)
-	app.Post("/api/v1/device-token", func(c *fiber.Ctx) error {
+	app.Post("/api/v1/device-token", jwtMiddleware, func(c *fiber.Ctx) error {
 		type TokenRequest struct {
 			Email    string `json:"email"`
 			FCMToken string `json:"fcm_token"`
@@ -1093,7 +1126,13 @@ func main() {
 	})
 
 	// API Rotası 14: İşletme İstatistikleri (Gelişmiş Raporlama)
-	app.Get("/api/v1/business/stats", func(c *fiber.Ctx) error {
+	app.Get("/api/v1/business/stats", jwtMiddleware, func(c *fiber.Ctx) error {
+		ownerEmail := c.Locals("user_email").(string)
+		var businessID string
+		if err := db.QueryRow("SELECT id FROM businesses WHERE owner_email = $1", ownerEmail).Scan(&businessID); err != nil {
+			return c.Status(403).JSON(fiber.Map{"error": "Bu hesaba bağlı işletme bulunamadı"})
+		}
+
 		// 1. KPI'lar: Toplam Kazanç, Satılan Paket Sayısı
 		var totalRevenue float64
 		var totalSold int
@@ -1102,8 +1141,8 @@ func main() {
 			SELECT COALESCE(SUM(p.discounted_price), 0), COUNT(o.id)
 			FROM orders o
 			JOIN packages p ON o.package_id = p.id
-			WHERE o.status = 'Teslim Edildi'
-		`).Scan(&totalRevenue, &totalSold)
+			WHERE o.status = 'Teslim Edildi' AND p.business_id = $1
+		`, businessID).Scan(&totalRevenue, &totalSold)
 
 		if err != nil {
 			log.Println("KPI sorgu hatası:", err)
@@ -1119,10 +1158,10 @@ func main() {
 			SELECT TO_CHAR(o.created_at, 'YYYY-MM-DD') as day, SUM(p.discounted_price) as revenue
 			FROM orders o
 			JOIN packages p ON o.package_id = p.id
-			WHERE o.status = 'Teslim Edildi' AND o.created_at >= NOW() - INTERVAL '7 days'
+			WHERE o.status = 'Teslim Edildi' AND o.created_at >= NOW() - INTERVAL '7 days' AND p.business_id = $1
 			GROUP BY day
 			ORDER BY day ASC
-		`)
+		`, businessID)
 		if err != nil {
 			log.Println("Haftalık kazanç sorgu hatası:", err)
 			return c.Status(500).JSON(fiber.Map{"error": "Haftalık kazanç alınamadı"})
@@ -1146,11 +1185,11 @@ func main() {
 			SELECT p.name, COUNT(o.id) as sales
 			FROM orders o
 			JOIN packages p ON o.package_id = p.id
-			WHERE o.status = 'Teslim Edildi'
+			WHERE o.status = 'Teslim Edildi' AND p.business_id = $1
 			GROUP BY p.name
 			ORDER BY sales DESC
 			LIMIT 5
-		`)
+		`, businessID)
 		if err != nil {
 			log.Println("Popüler paket sorgu hatası:", err)
 			return c.Status(500).JSON(fiber.Map{"error": "Popüler paketler alınamadı"})
@@ -1181,7 +1220,7 @@ func main() {
 	})
 
 	// API Rotası 11: Kullanıcının Siparişlerini Çekme (Flutter Siparişlerim UI Kullanır)
-	app.Get("/api/v1/orders/me", func(c *fiber.Ctx) error {
+	app.Get("/api/v1/orders/me", jwtMiddleware, func(c *fiber.Ctx) error {
 		// Kullanıcının emailini query param'dan al
 		buyerEmail := c.Query("email")
 		if buyerEmail == "" {
@@ -1189,10 +1228,16 @@ func main() {
 		}
 
 		rows, err := db.Query(`
-			SELECT o.id, o.package_id, p.name, o.status, o.created_at, p.business_id 
+			SELECT o.id, o.package_id,
+				COALESCE(o.package_name, p.name, o.package_id::text) AS display_name,
+				o.status, o.created_at,
+				COALESCE(p.business_id, '') AS business_id,
+				COALESCE(o.total_price, p.discounted_price, 0) AS total_price,
+				COALESCE(o.package_image_url, p.image_url, '') AS image_url,
+				EXISTS(SELECT 1 FROM reviews r WHERE r.order_id = o.id) AS has_review
 			FROM orders o
 			LEFT JOIN packages p ON o.package_id = p.id
-			WHERE o.buyer_email = $1 
+			WHERE o.buyer_email = $1
 			ORDER BY o.created_at DESC
 		`, buyerEmail)
 
@@ -1204,25 +1249,23 @@ func main() {
 
 		var orders []map[string]interface{}
 		for rows.Next() {
-			var id, packageID, status string
-			var packageName, businessId sql.NullString
+			var id, packageID, displayName, status, businessId, imageUrl string
+			var totalPrice float64
 			var createdAt time.Time
-			if err := rows.Scan(&id, &packageID, &packageName, &status, &createdAt, &businessId); err != nil {
+			var hasReview bool
+			if err := rows.Scan(&id, &packageID, &displayName, &status, &createdAt, &businessId, &totalPrice, &imageUrl, &hasReview); err != nil {
 				continue
 			}
-
-			pkgName := packageID // Fallback: paket silinmişse ID göster
-			if packageName.Valid && packageName.String != "" {
-				pkgName = packageName.String
-			}
-
 			orders = append(orders, map[string]interface{}{
 				"id":           id,
 				"package_id":   packageID,
-				"package_name": pkgName,
+				"package_name": displayName,
 				"status":       status,
 				"created_at":   createdAt,
-				"business_id":  businessId.String,
+				"business_id":  businessId,
+				"total_price":  totalPrice,
+				"image_url":    imageUrl,
+				"has_review":   hasReview,
 			})
 		}
 
@@ -1231,192 +1274,10 @@ func main() {
 		}
 
 		return c.Status(200).JSON(orders)
-	})
-
-	// API Rotası 12: İşletme Sipariş Durumunu Güncelle (PATCH)
-	app.Patch("/api/v1/orders/:id/status", func(c *fiber.Ctx) error {
-		orderID := c.Params("id")
-		if orderID == "" {
-			return c.Status(400).JSON(fiber.Map{"error": "Sipariş ID gerekli"})
-		}
-
-		type StatusRequest struct {
-			Status string `json:"status"`
-		}
-		var req StatusRequest
-		if err := c.BodyParser(&req); err != nil {
-			return c.Status(400).JSON(fiber.Map{"error": "Geçersiz istek"})
-		}
-
-		log.Printf("📋 Durum güncelleme isteği: order=%s, yeni_durum='%s' (len=%d)", orderID, req.Status, len(req.Status))
-
-		// İzin verilen durumlar (switch ile — encoding problemi olmaz)
-		switch req.Status {
-		case "Hazırlanıyor", "Teslim Edilmeyi Bekliyor":
-			// geçerli, devam et
-		default:
-			log.Printf("❌ Geçersiz durum reddedildi: '%s'", req.Status)
-			return c.Status(400).JSON(fiber.Map{"error": "Geçersiz durum: " + req.Status})
-		}
-
-		// Mevcut durumu kontrol et (Teslim Edilmiş siparişi geri çevirmeyi engelle)
-		var currentStatus string
-		err := db.QueryRow("SELECT status FROM orders WHERE id = $1", orderID).Scan(&currentStatus)
-		if err != nil {
-			return c.Status(404).JSON(fiber.Map{"error": "Sipariş bulunamadı"})
-		}
-		if currentStatus == "Teslim Edildi" {
-			return c.Status(400).JSON(fiber.Map{"error": "Teslim edilmiş siparişin durumu değiştirilemez"})
-		}
-
-		_, updateErr := db.Exec("UPDATE orders SET status = $1 WHERE id = $2", req.Status, orderID)
-		if updateErr != nil {
-			log.Println("Durum güncelleme hatası:", updateErr)
-			return c.Status(500).JSON(fiber.Map{"error": "Durum güncellenemedi"})
-		}
-
-		// (V2) Sipariş Durum Geçmişini Kaydet
-		_, histErr := db.Exec("INSERT INTO order_status_history (order_id, status, changed_at) VALUES ($1, $2, $3)", orderID, req.Status, time.Now())
-		if histErr != nil {
-			log.Println("Durum geçmişi kaydetme hatası:", histErr)
-		}
-
-		// Push Bildirim: Hazır olduysa müşteriye bildir
-		if req.Status == "Teslim Edilmeyi Bekliyor" {
-			var buyerEmail string
-			if err := db.QueryRow("SELECT buyer_email FROM orders WHERE id = $1", orderID).Scan(&buyerEmail); err == nil {
-				go sendFCMToEmail(db, buyerEmail,
-					"Siparişiniz Hazır! 🎉",
-					"QR kodunuzu göstererek teslim alabilirsiniz.",
-				)
-			}
-		} else if req.Status == "Hazırlanıyor" {
-			var buyerEmail string
-			if err := db.QueryRow("SELECT buyer_email FROM orders WHERE id = $1", orderID).Scan(&buyerEmail); err == nil {
-				go sendFCMToEmail(db, buyerEmail,
-					"Siparişiniz Hazırlanıyor 👨‍🍳",
-					"Siparışiniz şu anda hazırlanıyor, kısa sürede hazır olacak!",
-				)
-			}
-		}
-
-		log.Printf("✅ Sipariş durumu güncellendi: %s → %s", orderID, req.Status)
-		return c.JSON(fiber.Map{"message": "Durum güncellendi", "order_id": orderID, "status": req.Status})
-	})
-
-	// API Rotası 13: FCM Token Kayıt (Flutter'dan tek seferlik)
-	app.Post("/api/v1/device-token", func(c *fiber.Ctx) error {
-		type TokenRequest struct {
-			Email    string `json:"email"`
-			FCMToken string `json:"fcm_token"`
-		}
-		var req TokenRequest
-		if err := c.BodyParser(&req); err != nil || req.Email == "" || req.FCMToken == "" {
-			return c.Status(400).JSON(fiber.Map{"error": "email ve fcm_token gerekli"})
-		}
-		_, err := db.Exec(`
-			INSERT INTO device_tokens (user_email, fcm_token, updated_at)
-			VALUES ($1, $2, $3)
-			ON CONFLICT (user_email) DO UPDATE SET fcm_token = EXCLUDED.fcm_token, updated_at = EXCLUDED.updated_at`,
-			req.Email, req.FCMToken, time.Now())
-		if err != nil {
-			log.Println("Token kaydetme hatası:", err)
-			return c.Status(500).JSON(fiber.Map{"error": "Token kaydedilemedi"})
-		}
-		log.Printf("🔔 FCM token kaydedildi: %s", req.Email)
-		return c.JSON(fiber.Map{"message": "Token kaydedildi"})
-	})
-
-	// API Rotası 14: İşletme İstatistikleri (Gelişmiş Raporlama)
-	app.Get("/api/v1/business/stats", func(c *fiber.Ctx) error {
-		// 1. KPI'lar: Toplam Kazanç, Satılan Paket Sayısı
-		var totalRevenue float64
-		var totalSold int
-
-		err := db.QueryRow(`
-			SELECT COALESCE(SUM(p.discounted_price), 0), COUNT(o.id)
-			FROM orders o
-			JOIN packages p ON o.package_id = p.id
-			WHERE o.status = 'Teslim Edildi'
-		`).Scan(&totalRevenue, &totalSold)
-
-		if err != nil {
-			log.Println("KPI sorgu hatası:", err)
-			return c.Status(500).JSON(fiber.Map{"error": "İstatistikler alınamadı"})
-		}
-
-		// Kurtarılan Gıda (her 1 paket = 0.5 kg varsayalım)
-		savedFoodKg := float64(totalSold) * 0.5
-
-		// 2. Haftalık Kazanç Grafiği (Son 7 Gün)
-		// PostgreSQL'de generate_series veya basitçe son 7 günü gruplama
-		rows, err := db.Query(`
-			SELECT TO_CHAR(o.created_at, 'YYYY-MM-DD') as day, SUM(p.discounted_price) as revenue
-			FROM orders o
-			JOIN packages p ON o.package_id = p.id
-			WHERE o.status = 'Teslim Edildi' AND o.created_at >= NOW() - INTERVAL '7 days'
-			GROUP BY day
-			ORDER BY day ASC
-		`)
-		if err != nil {
-			log.Println("Haftalık kazanç sorgu hatası:", err)
-			return c.Status(500).JSON(fiber.Map{"error": "Haftalık kazanç alınamadı"})
-		}
-		defer rows.Close()
-
-		type DailyRevenue struct {
-			Date    string  `json:"date"`
-			Revenue float64 `json:"revenue"`
-		}
-		var weeklyRevenue []DailyRevenue
-		for rows.Next() {
-			var dr DailyRevenue
-			if err := rows.Scan(&dr.Date, &dr.Revenue); err == nil {
-				weeklyRevenue = append(weeklyRevenue, dr)
-			}
-		}
-
-		// 3. En Çok Satılan Paketler (Top 5)
-		topRows, err := db.Query(`
-			SELECT p.name, COUNT(o.id) as sales
-			FROM orders o
-			JOIN packages p ON o.package_id = p.id
-			WHERE o.status = 'Teslim Edildi'
-			GROUP BY p.name
-			ORDER BY sales DESC
-			LIMIT 5
-		`)
-		if err != nil {
-			log.Println("Popüler paket sorgu hatası:", err)
-			return c.Status(500).JSON(fiber.Map{"error": "Popüler paketler alınamadı"})
-		}
-		defer topRows.Close()
-
-		type TopPackage struct {
-			Name  string `json:"name"`
-			Sales int    `json:"sales"`
-		}
-		var topPackages []TopPackage
-		for topRows.Next() {
-			var tp TopPackage
-			if err := topRows.Scan(&tp.Name, &tp.Sales); err == nil {
-				topPackages = append(topPackages, tp)
-			}
-		}
-
-		return c.JSON(fiber.Map{
-			"kpis": fiber.Map{
-				"totalRevenue": totalRevenue,
-				"totalSold":    totalSold,
-				"savedFoodKg":  savedFoodKg,
-			},
-			"weekly_revenue": weeklyRevenue,
-			"top_packages":   topPackages,
-		})
 	})
 
 	// API Rotası 15: Yorum ve Puan (Reviews) Ekleme
-	app.Post("/api/v1/reviews", func(c *fiber.Ctx) error {
+	app.Post("/api/v1/reviews", rateLimiter(5, time.Minute), jwtMiddleware, func(c *fiber.Ctx) error {
 		type ReviewRequest struct {
 			OrderID    string `json:"order_id"`
 			UserEmail  string `json:"user_email"`
@@ -1429,7 +1290,14 @@ func main() {
 			return c.Status(400).JSON(fiber.Map{"error": "Geçersiz İstek"})
 		}
 
-		_, err := db.Exec(`INSERT INTO reviews (order_id, user_email, business_id, rating, comment, created_at) 
+		// Duplicate prevention: bir işletme için tek yorum
+		var existing int
+		db.QueryRow("SELECT COUNT(*) FROM reviews WHERE user_email = $1 AND business_id = $2", req.UserEmail, req.BusinessID).Scan(&existing)
+		if existing > 0 {
+			return c.Status(409).JSON(fiber.Map{"error": "Bu işletmeyi zaten değerlendirdiniz"})
+		}
+
+		_, err := db.Exec(`INSERT INTO reviews (order_id, user_email, business_id, rating, comment, created_at)
 			VALUES ($1, $2, $3, $4, $5, $6)`, req.OrderID, req.UserEmail, req.BusinessID, req.Rating, req.Comment, time.Now())
 		if err != nil {
 			return c.Status(500).JSON(fiber.Map{"error": "Değerlendirme gönderilemedi"})
@@ -1438,7 +1306,7 @@ func main() {
 	})
 
 	// API Rotası 16: Favori Dükkanlara Ekle
-	app.Post("/api/v1/favorites", func(c *fiber.Ctx) error {
+	app.Post("/api/v1/favorites", jwtMiddleware, func(c *fiber.Ctx) error {
 		type FavReq struct {
 			UserEmail    string `json:"user_email"`
 			BusinessID   string `json:"business_id"`
@@ -1457,7 +1325,7 @@ func main() {
 	})
 
 	// API Rotası 17: Favori Dükkanlardan Çıkar
-	app.Delete("/api/v1/favorites", func(c *fiber.Ctx) error {
+	app.Delete("/api/v1/favorites", jwtMiddleware, func(c *fiber.Ctx) error {
 		type FavReq struct {
 			UserEmail    string `json:"user_email"`
 			BusinessName string `json:"business_name"`
@@ -1474,41 +1342,65 @@ func main() {
 	})
 
 	// API Rotası 18: Kullanıcının Favorilerini Getir
-	app.Get("/api/v1/favorites", func(c *fiber.Ctx) error {
+	app.Get("/api/v1/favorites", jwtMiddleware, func(c *fiber.Ctx) error {
 		email := c.Query("email")
 		if email == "" {
 			return c.Status(400).JSON(fiber.Map{"error": "email parametresi gerekli"})
 		}
-		rows, err := db.Query("SELECT business_id, business_name FROM favorite_shops WHERE user_email=$1", email)
+		rows, err := db.Query(`
+			SELECT f.business_id, f.business_name,
+			       COALESCE(b.address,'') as address,
+			       COALESCE(b.latitude, 0) as latitude,
+			       COALESCE(b.longitude, 0) as longitude,
+			       COALESCE(b.logo_url,'') as logo_url,
+			       COALESCE(b.category,'') as category
+			FROM favorite_shops f
+			LEFT JOIN businesses b ON f.business_id::text = b.id::text
+			WHERE f.user_email=$1`, email)
 		if err != nil {
+			log.Println("Favoriler çekilemedi:", err)
 			return c.Status(500).JSON(fiber.Map{"error": "Favoriler çekilemedi"})
 		}
 		defer rows.Close()
 
-		favs := []map[string]string{}
+		favs := []map[string]interface{}{}
 		for rows.Next() {
-			var bId, bName sql.NullString
-			if err := rows.Scan(&bId, &bName); err == nil {
-				favs = append(favs, map[string]string{
+			var bId, bName, addr, logo, cat sql.NullString
+			var lat, lon sql.NullFloat64
+			if err := rows.Scan(&bId, &bName, &addr, &lat, &lon, &logo, &cat); err == nil {
+				favs = append(favs, map[string]interface{}{
+					"id":            bId.String,
 					"business_id":   bId.String,
 					"business_name": bName.String,
+					"name":          bName.String,
+					"address":       addr.String,
+					"latitude":      lat.Float64,
+					"longitude":     lon.Float64,
+					"logo_url":      logo.String,
+					"category":      cat.String,
 				})
 			}
 		}
 		if favs == nil {
-			favs = []map[string]string{}
+			favs = []map[string]interface{}{}
 		}
 		return c.JSON(favs)
 	})
 
 	// API Rotası 19: İşletmenin Aldığı Yorumlar (Reviews)
-	app.Get("/api/v1/business/reviews", func(c *fiber.Ctx) error {
+	app.Get("/api/v1/business/reviews", jwtMiddleware, func(c *fiber.Ctx) error {
+		ownerEmail := c.Locals("user_email").(string)
+		var businessID string
+		if err := db.QueryRow("SELECT id FROM businesses WHERE owner_email = $1", ownerEmail).Scan(&businessID); err != nil {
+			return c.Status(403).JSON(fiber.Map{"error": "Bu hesaba bağlı işletme bulunamadı"})
+		}
+
 		rows, err := db.Query(`
 			SELECT r.id, r.order_id, r.user_email, r.rating, r.comment, r.created_at
 			FROM reviews r
-			WHERE r.business_id = 'business-123'
+			WHERE r.business_id = $1
 			ORDER BY r.created_at DESC
-		`)
+		`, businessID)
 		if err != nil {
 			log.Println("Reviews sorgu hatası:", err)
 			return c.Status(500).JSON(fiber.Map{"error": "Değerlendirmeler getirilemedi"})
@@ -1539,7 +1431,7 @@ func main() {
 
 		// Ortalama puan hesapla
 		var avgRating float64
-		db.QueryRow("SELECT COALESCE(AVG(rating), 0) FROM reviews WHERE business_id = 'business-123'").Scan(&avgRating)
+		db.QueryRow("SELECT COALESCE(AVG(rating), 0) FROM reviews WHERE business_id = $1", businessID).Scan(&avgRating)
 
 		return c.JSON(fiber.Map{
 			"reviews":    reviews,
@@ -1549,28 +1441,218 @@ func main() {
 	})
 
 	// API Rotası 20: Kullanıcı Profili (Sadakat Puanı vs.)
-	app.Get("/api/v1/users/profile", func(c *fiber.Ctx) error {
+	app.Get("/api/v1/users/profile", jwtMiddleware, func(c *fiber.Ctx) error {
 		email := c.Query("email")
 		if email == "" {
 			return c.Status(400).JSON(fiber.Map{"error": "email parametresi gerekli"})
 		}
+
 		var fullName, phone string
 		var loyalty int
-		err := db.QueryRow("SELECT full_name, phone_number, loyalty_points FROM users WHERE email = $1", email).Scan(&fullName, &phone, &loyalty)
+		err := db.QueryRow("SELECT COALESCE(full_name,''), COALESCE(phone_number,''), COALESCE(loyalty_points,0) FROM users WHERE email = $1", email).Scan(&fullName, &phone, &loyalty)
 		if err != nil {
-			// Kullanıcı yoksa oluştur (Upsert mekanizmasına alternatif) veya hata dön
-			return c.JSON(fiber.Map{
-				"email":          email,
-				"full_name":      "",
-				"phone_number":   "",
-				"loyalty_points": 0,
-			})
+			fullName, phone, loyalty = "", "", 0
 		}
+
+		// Tamamlanan sipariş sayısı + kurtarılan gıda hesabı
+		var totalOrders, completedOrders int
+		db.QueryRow("SELECT COUNT(*) FROM orders WHERE buyer_email = $1", email).Scan(&totalOrders)
+		db.QueryRow("SELECT COUNT(*) FROM orders WHERE buyer_email = $1 AND status = 'Teslim Edildi'", email).Scan(&completedOrders)
+		savedFoodKg := float64(completedOrders) * 0.5
+
 		return c.JSON(fiber.Map{
-			"email":          email,
-			"full_name":      fullName,
-			"phone_number":   phone,
-			"loyalty_points": loyalty,
+			"email":            email,
+			"full_name":        fullName,
+			"phone_number":     phone,
+			"loyalty_points":   loyalty,
+			"total_orders":     totalOrders,
+			"completed_orders": completedOrders,
+			"saved_food_kg":    savedFoodKg,
+		})
+	})
+
+	// API Rotası 21: Kullanıcı Profili Güncelle
+	app.Patch("/api/v1/users/profile", jwtMiddleware, func(c *fiber.Ctx) error {
+		var body struct {
+			Email       string `json:"email"`
+			FullName    string `json:"full_name"`
+			PhoneNumber string `json:"phone_number"`
+		}
+		if err := c.BodyParser(&body); err != nil || body.Email == "" {
+			return c.Status(400).JSON(fiber.Map{"error": "geçersiz istek"})
+		}
+		_, err := db.Exec(
+			`INSERT INTO users (email, full_name, phone_number)
+			 VALUES ($1, $2, $3)
+			 ON CONFLICT (email) DO UPDATE
+			   SET full_name = EXCLUDED.full_name,
+			       phone_number = EXCLUDED.phone_number`,
+			body.Email, body.FullName, body.PhoneNumber,
+		)
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "güncelleme başarısız"})
+		}
+		return c.JSON(fiber.Map{"message": "profil güncellendi"})
+	})
+
+	// API Rotası: İşletme Paket Düzenle (PATCH)
+	app.Patch("/api/v1/business/packages/:id", jwtMiddleware, func(c *fiber.Ctx) error {
+		ownerEmail := c.Locals("user_email").(string)
+		packageID := c.Params("id")
+
+		// Paketin bu işletmeye ait olduğunu doğrula
+		var count int
+		err := db.QueryRow(`
+			SELECT COUNT(*) FROM packages p
+			JOIN businesses b ON p.business_id = b.id
+			WHERE p.id = $1 AND b.owner_email = $2`, packageID, ownerEmail).Scan(&count)
+		if err != nil || count == 0 {
+			return c.Status(403).JSON(fiber.Map{"error": "Bu paketi düzenleme yetkiniz yok"})
+		}
+
+		var body struct {
+			Name            string   `json:"name"`
+			Description     string   `json:"description"`
+			OriginalPrice   float64  `json:"original_price"`
+			DiscountedPrice float64  `json:"discounted_price"`
+			Stock           int      `json:"stock"`
+			IsActive        bool     `json:"is_active"`
+			ImageUrl        string   `json:"image_url"`
+			Category        string   `json:"category"`
+			Tags            []string `json:"tags"`
+			AvailableFrom   string   `json:"available_from"`
+			AvailableUntil  string   `json:"available_until"`
+		}
+		if err := c.BodyParser(&body); err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": "Geçersiz veri formatı"})
+		}
+
+		tagsJSON := "[]"
+		if len(body.Tags) > 0 {
+			b, _ := json.Marshal(body.Tags)
+			tagsJSON = string(b)
+		}
+
+		if body.Category == "" {
+			body.Category = "Diğer"
+		}
+
+		availFrom := sql.NullString{String: body.AvailableFrom, Valid: body.AvailableFrom != ""}
+		availUntil := sql.NullString{String: body.AvailableUntil, Valid: body.AvailableUntil != ""}
+
+		_, err = db.Exec(`
+			UPDATE packages SET
+				name = $1, description = $2, original_price = $3, discounted_price = $4,
+				stock = $5, is_active = $6, image_url = $7, category = $8, tags = $9,
+				available_from = $10, available_until = $11
+			WHERE id = $12`,
+			body.Name, body.Description, body.OriginalPrice, body.DiscountedPrice,
+			body.Stock, body.IsActive, body.ImageUrl, body.Category, tagsJSON,
+			availFrom, availUntil, packageID)
+		if err != nil {
+			log.Println("Paket güncelleme hatası:", err)
+			return c.Status(500).JSON(fiber.Map{"error": "Paket güncellenemedi"})
+		}
+
+		return c.JSON(fiber.Map{"message": "Paket güncellendi"})
+	})
+
+	// API Rotası: İşletme Paket Sil (DELETE)
+	app.Delete("/api/v1/business/packages/:id", jwtMiddleware, func(c *fiber.Ctx) error {
+		ownerEmail := c.Locals("user_email").(string)
+		packageID := c.Params("id")
+
+		// Paketin bu işletmeye ait olduğunu doğrula
+		var count int
+		err := db.QueryRow(`
+			SELECT COUNT(*) FROM packages p
+			JOIN businesses b ON p.business_id = b.id
+			WHERE p.id = $1 AND b.owner_email = $2`, packageID, ownerEmail).Scan(&count)
+		if err != nil || count == 0 {
+			return c.Status(403).JSON(fiber.Map{"error": "Bu paketi silme yetkiniz yok"})
+		}
+
+		_, err = db.Exec("DELETE FROM packages WHERE id = $1", packageID)
+		if err != nil {
+			log.Println("Paket silme hatası:", err)
+			return c.Status(500).JSON(fiber.Map{"error": "Paket silinemedi"})
+		}
+		return c.Status(200).JSON(fiber.Map{"message": "Paket silindi"})
+	})
+
+	// API Rotası: İşletme Ara (Herkese Açık)
+	app.Get("/api/v1/businesses/search", func(c *fiber.Ctx) error {
+		q := c.Query("q")
+		rows, err := db.Query(`
+			SELECT id, COALESCE(name,'') as name, COALESCE(address,'') as address,
+			       latitude, longitude,
+			       COALESCE(logo_url,'') as logo_url, COALESCE(category,'') as category
+			FROM businesses
+			WHERE is_active = true AND ($1 = '' OR name ILIKE '%' || $1 || '%')
+			ORDER BY name
+			LIMIT 30`, q)
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "İşletmeler getirilemedi"})
+		}
+		defer rows.Close()
+
+		type BizResult struct {
+			ID        string  `json:"id"`
+			Name      string  `json:"name"`
+			Address   string  `json:"address"`
+			Latitude  float64 `json:"latitude"`
+			Longitude float64 `json:"longitude"`
+			LogoUrl   string  `json:"logo_url"`
+			Category  string  `json:"category"`
+		}
+		results := []BizResult{}
+		for rows.Next() {
+			var b BizResult
+			if err := rows.Scan(&b.ID, &b.Name, &b.Address, &b.Latitude, &b.Longitude, &b.LogoUrl, &b.Category); err != nil {
+				continue
+			}
+			results = append(results, b)
+		}
+		return c.JSON(results)
+	})
+
+	// API Rotası: İşletme Yorumları (Herkese Açık)
+	app.Get("/api/v1/businesses/:id/reviews", func(c *fiber.Ctx) error {
+		bizID := c.Params("id")
+		rows, err := db.Query(`
+			SELECT user_email, rating, COALESCE(comment,'') as comment, created_at
+			FROM reviews
+			WHERE business_id = $1
+			ORDER BY created_at DESC
+			LIMIT 20`, bizID)
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Yorumlar getirilemedi"})
+		}
+		defer rows.Close()
+
+		type ReviewItem struct {
+			UserEmail string    `json:"user_email"`
+			Rating    int       `json:"rating"`
+			Comment   string    `json:"comment"`
+			CreatedAt time.Time `json:"created_at"`
+		}
+		items := []ReviewItem{}
+		for rows.Next() {
+			var r ReviewItem
+			if err := rows.Scan(&r.UserEmail, &r.Rating, &r.Comment, &r.CreatedAt); err != nil {
+				continue
+			}
+			items = append(items, r)
+		}
+
+		var avgRating float64
+		var count int
+		db.QueryRow("SELECT COALESCE(AVG(rating),0), COUNT(*) FROM reviews WHERE business_id = $1", bizID).Scan(&avgRating, &count)
+
+		return c.JSON(fiber.Map{
+			"reviews":    items,
+			"avg_rating": avgRating,
+			"count":      count,
 		})
 	})
 

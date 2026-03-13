@@ -1,8 +1,8 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:flutter/foundation.dart';
-import 'package:url_launcher/url_launcher.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -10,10 +10,11 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'login_screen.dart';
 import 'api_config.dart';
-import 'screens/payment_page.dart';
 import 'screens/orders_screen.dart';
 import 'screens/map_screen.dart';
 import 'screens/favorites_screen.dart';
+import 'screens/profile_screen.dart';
+import 'screens/business_search_screen.dart';
 
 // Ön plan bildirim kanalı (Android için)
 final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
@@ -71,7 +72,7 @@ Future<void> _initLocalNotifications() async {
       AndroidInitializationSettings('@mipmap/ic_launcher');
   const InitializationSettings initSettings =
       InitializationSettings(android: androidSettings);
-  await flutterLocalNotificationsPlugin.initialize(initSettings);
+  await flutterLocalNotificationsPlugin.initialize(settings: initSettings);
 }
 
 /// FCM izin + token alma + ön plan mesaj dinleyici
@@ -110,10 +111,10 @@ Future<void> _setupFCM() async {
     final notification = message.notification;
     if (notification != null) {
       flutterLocalNotificationsPlugin.show(
-        notification.hashCode,
-        notification.title,
-        notification.body,
-        NotificationDetails(
+        id: notification.hashCode,
+        title: notification.title,
+        body: notification.body,
+        notificationDetails: NotificationDetails(
           android: AndroidNotificationDetails(
             fcmChannel.id,
             fcmChannel.name,
@@ -136,7 +137,7 @@ Future<void> _saveFCMTokenToBackend(String token) async {
     if (email == null || email.isEmpty) return;
     await http.post(
       Uri.parse('$apiBaseUrl/api/v1/device-token'),
-      headers: {'Content-Type': 'application/json'},
+      headers: await authHeaders(),
       body: jsonEncode({'email': email, 'fcm_token': token}),
     );
     debugPrint('FCM token backend\'e kaydedildi: $email');
@@ -174,23 +175,25 @@ class _AuthGateState extends State<AuthGate> {
   @override
   void initState() {
     super.initState();
-    _checkAuth();
+    // İlk frame çizildikten sonra yönlendir (build sırasında navigation hatası önlenir)
+    WidgetsBinding.instance.addPostFrameCallback((_) => _checkAuth());
   }
 
   Future<void> _checkAuth() async {
-    final prefs = await SharedPreferences.getInstance();
-    final email = prefs.getString('user_email');
+    final session = Supabase.instance.client.auth.currentSession;
 
     if (!mounted) return;
 
-    if (email != null && email.isNotEmpty) {
-      // Kayıtlı kullanıcı var → Ana sayfaya git
+    if (session != null) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('user_email', session.user.email ?? '');
+      if (!mounted) return;
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(builder: (context) => const MainNavigationScreen()),
       );
     } else {
-      // Kayıtlı kullanıcı yok → Giriş sayfasına git
+      if (!mounted) return;
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(builder: (context) => const LoginScreen()),
@@ -232,6 +235,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     OrdersScreen(),
     MapScreen(),
     FavoritesScreen(),
+    ProfileScreen(),
   ];
 
   @override
@@ -253,6 +257,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
                 _NavItem(icon: Icons.receipt_long_rounded,label: 'Siparişlerim',index: 1, selected: _selectedIndex, onTap: (i) => setState(() => _selectedIndex = i)),
                 _NavItem(icon: Icons.map_rounded,         label: 'Harita',      index: 2, selected: _selectedIndex, onTap: (i) => setState(() => _selectedIndex = i)),
                 _NavItem(icon: Icons.favorite_rounded,    label: 'Favoriler',   index: 3, selected: _selectedIndex, onTap: (i) => setState(() => _selectedIndex = i)),
+                _NavItem(icon: Icons.person_rounded,      label: 'Profil',      index: 4, selected: _selectedIndex, onTap: (i) => setState(() => _selectedIndex = i)),
               ],
             ),
           ),
@@ -324,10 +329,24 @@ class _PackagesScreenState extends State<PackagesScreen> {
   bool isLoading = true;
   String? userEmail;
 
+  final _searchCtrl = TextEditingController();
+  String _searchQ = '';
+  String _selectedCategory = '';
+  Timer? _debounce;
+
+  static const _categories = ['Tümü', 'Yemek', 'Tatlı', 'İçecek', 'Vegan', 'Kahvaltı'];
+
   @override
   void initState() {
     super.initState();
     _init();
+  }
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    _debounce?.cancel();
+    super.dispose();
   }
 
   Future<void> _init() async {
@@ -339,7 +358,13 @@ class _PackagesScreenState extends State<PackagesScreen> {
   Future<void> fetchPackages() async {
     setState(() => isLoading = true);
     try {
-      final res = await http.get(Uri.parse('$apiBaseUrl/api/v1/packages'));
+      final uri = Uri.parse('$apiBaseUrl/api/v1/packages').replace(
+        queryParameters: {
+          if (_searchQ.isNotEmpty) 'q': _searchQ,
+          if (_selectedCategory.isNotEmpty) 'category': _selectedCategory,
+        },
+      );
+      final res = await http.get(uri);
       if (res.statusCode == 200) {
         setState(() { packages = json.decode(res.body) ?? []; isLoading = false; });
       } else {
@@ -349,6 +374,19 @@ class _PackagesScreenState extends State<PackagesScreen> {
       debugPrint('Packages error: $e');
       setState(() => isLoading = false);
     }
+  }
+
+  void _onSearchChanged(String val) {
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 400), () {
+      setState(() => _searchQ = val.trim());
+      fetchPackages();
+    });
+  }
+
+  void _selectCategory(String cat) {
+    setState(() => _selectedCategory = cat == 'Tümü' ? '' : cat);
+    fetchPackages();
   }
 
   @override
@@ -361,7 +399,7 @@ class _PackagesScreenState extends State<PackagesScreen> {
           children: [
             // ── Header ──
             Padding(
-              padding: const EdgeInsets.fromLTRB(20, 20, 8, 16),
+              padding: const EdgeInsets.fromLTRB(20, 20, 8, 8),
               child: Row(
                 children: [
                   Expanded(
@@ -383,11 +421,20 @@ class _PackagesScreenState extends State<PackagesScreen> {
                     icon: const Icon(Icons.refresh_rounded, color: Color(0xFF64748B)),
                   ),
                   IconButton(
+                    icon: const Icon(Icons.store_rounded, color: Color(0xFF64748B)),
+                    tooltip: 'İşletme Ara',
+                    onPressed: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const BusinessSearchScreen()),
+                    ),
+                  ),
+                  IconButton(
                     icon: const Icon(Icons.logout_rounded, color: Color(0xFF94A3B8)),
                     tooltip: 'Çıkış Yap',
                     onPressed: () async {
                       final prefs = await SharedPreferences.getInstance();
                       await prefs.clear();
+                      await Supabase.instance.client.auth.signOut();
                       if (!context.mounted) return;
                       Navigator.pushAndRemoveUntil(context,
                         MaterialPageRoute(builder: (_) => const LoginScreen()), (_) => false);
@@ -396,6 +443,74 @@ class _PackagesScreenState extends State<PackagesScreen> {
                 ],
               ),
             ),
+
+            // ── Arama Çubuğu ──
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: TextField(
+                controller: _searchCtrl,
+                onChanged: _onSearchChanged,
+                style: const TextStyle(fontSize: 14, color: Color(0xFF0F172A)),
+                decoration: InputDecoration(
+                  hintText: 'Paket ara...',
+                  hintStyle: const TextStyle(color: Color(0xFFCBD5E1), fontSize: 14),
+                  prefixIcon: const Icon(Icons.search_rounded, size: 20, color: Color(0xFF94A3B8)),
+                  suffixIcon: _searchQ.isNotEmpty
+                      ? IconButton(
+                          icon: const Icon(Icons.clear_rounded, size: 18, color: Color(0xFF94A3B8)),
+                          onPressed: () {
+                            _searchCtrl.clear();
+                            setState(() => _searchQ = '');
+                            fetchPackages();
+                          },
+                        )
+                      : null,
+                  filled: true,
+                  fillColor: Colors.white,
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: Color(0xFFE2E8F0))),
+                  enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: Color(0xFFE2E8F0))),
+                  focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: Color(0xFFF97316), width: 1.5)),
+                ),
+              ),
+            ),
+
+            // ── Kategori Chip'leri ──
+            SizedBox(
+              height: 38,
+              child: ListView.separated(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                scrollDirection: Axis.horizontal,
+                itemCount: _categories.length,
+                separatorBuilder: (_, __) => const SizedBox(width: 8),
+                itemBuilder: (context, i) {
+                  final cat = _categories[i];
+                  final isSelected = (cat == 'Tümü' && _selectedCategory.isEmpty) || cat == _selectedCategory;
+                  return GestureDetector(
+                    onTap: () => _selectCategory(cat),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 200),
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: isSelected ? const Color(0xFFF97316) : Colors.white,
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(color: isSelected ? const Color(0xFFF97316) : const Color(0xFFE2E8F0)),
+                      ),
+                      child: Text(
+                        cat,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: isSelected ? Colors.white : const Color(0xFF64748B),
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+            const SizedBox(height: 8),
+
             // ── List ──
             Expanded(
               child: isLoading
@@ -434,9 +549,19 @@ class _PackagesScreenState extends State<PackagesScreen> {
             child: const Icon(Icons.fastfood_rounded, size: 36, color: Color(0xFFF97316)),
           ),
           const SizedBox(height: 16),
-          const Text('Aktif paket bulunamadı', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: Color(0xFF1E293B))),
+          Text(
+            _searchQ.isNotEmpty || _selectedCategory.isNotEmpty
+                ? 'Arama sonucu bulunamadı'
+                : 'Aktif paket bulunamadı',
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: Color(0xFF1E293B)),
+          ),
           const SizedBox(height: 6),
-          const Text('Yeni fırsatlar yakında eklenecek', style: TextStyle(fontSize: 13, color: Color(0xFF94A3B8))),
+          Text(
+            _searchQ.isNotEmpty || _selectedCategory.isNotEmpty
+                ? 'Farklı bir arama veya kategori deneyin'
+                : 'Yeni fırsatlar yakında eklenecek',
+            style: const TextStyle(fontSize: 13, color: Color(0xFF94A3B8)),
+          ),
         ],
       ),
     );
@@ -463,82 +588,50 @@ class _PackageCardState extends State<_PackageCard> {
     setState(() => isBuying = true);
     try {
       final res = await http.post(
-        Uri.parse('$apiBaseUrl/api/v1/payments/initialize'),
-        headers: {'Content-Type': 'application/json'},
+        Uri.parse('$apiBaseUrl/api/v1/orders'),
+        headers: await authHeaders(),
         body: json.encode({
           'package_id': widget.pkg['id'],
-          'price': widget.pkg['discounted_price'].toString(),
-          'email': widget.userEmail ?? 'bilinmeyen@kullanici.com',
-          'name': 'Kullanici', 'surname': 'Siparisci',
+          'buyer_email': widget.userEmail ?? '',
         }),
       );
-      if (res.statusCode == 200 && mounted) {
-        final data = json.decode(res.body);
-        final paymentUrl = (data['paymentPageUrl'] as String?)?.trim();
-        final token = (data['token'] as String?) ?? '';
-
-        if (paymentUrl == null || paymentUrl.isEmpty) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Ödeme linki alınamadı.')));
-          return;
-        }
-
-        bool? result = false;
-        if (kIsWeb) {
-          if (!await launchUrl(Uri.parse(paymentUrl), mode: LaunchMode.externalApplication)) {
-            if (!mounted) return;
-            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Ödeme sayfası açılamadı')));
-            return;
-          }
-          result = await showDialog<bool>(
-            context: context, barrierDismissible: false,
-            builder: (_) => AlertDialog(
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-              title: const Text('Ödeme İşlemi', style: TextStyle(fontWeight: FontWeight.bold)),
-              content: const Text('Açılan sekmede işlemi tamamlayın, ardından kontrol edin.'),
-              actions: [
-                TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('İptal')),
-                ElevatedButton(
-                  onPressed: () => Navigator.pop(context, true),
-                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFF97316), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
-                  child: const Text('Kontrol Et', style: TextStyle(color: Colors.white)),
-                ),
-              ],
-            ),
-          );
-        } else {
-          result = await Navigator.push<bool>(context,
-            MaterialPageRoute(builder: (_) => PaymentPage(paymentUrl: paymentUrl)));
-        }
-
-        if (result == true && mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Kontrol ediliyor...')));
-          final check = await http.post(
-            Uri.parse('$apiBaseUrl/api/v1/payments/check'),
-            headers: {'Content-Type': 'application/json'},
-            body: json.encode({'token': token, 'package_id': widget.pkg['id'], 'buyer_email': widget.userEmail ?? ''}),
-          );
-          if (check.statusCode == 200) {
-            final d = json.decode(check.body);
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                content: Text(d['status'] == 'success' ? 'Sipariş alındı! Afiyet olsun.' : 'Ödeme başarısız veya iptal edildi.'),
-                backgroundColor: d['status'] == 'success' ? const Color(0xFF10B981) : const Color(0xFFEF4444),
-                behavior: SnackBarBehavior.floating,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                margin: const EdgeInsets.all(16),
-              ));
-              if (d['status'] == 'success') widget.onSuccess();
-            }
-          }
-        }
-      } else if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Ödeme başlatılamadı!')));
+      if (!mounted) return;
+      if (res.statusCode == 201) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: const Text('Siparişiniz alındı! Ödemeyi teslimatta yapabilirsiniz. 🎉'),
+          backgroundColor: const Color(0xFF10B981),
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          margin: const EdgeInsets.all(16),
+        ));
+        widget.onSuccess();
+      } else {
+        String errMsg = 'Sipariş oluşturulamadı (${res.statusCode})';
+        try { final d = json.decode(res.body); errMsg = d['error'] ?? errMsg; } catch (_) {}
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(errMsg)));
       }
-    } catch (_) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Bağlantı hatası!')));
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Bağlantı hatası: $e')));
     } finally {
       if (mounted) setState(() => isBuying = false);
     }
+  }
+
+  // Kalan süreyi hesaplar. Örn: "19:30:00" → "1 sa 15 dk kaldı"
+  String? _remainingTime() {
+    final untilStr = widget.pkg['available_until']?.toString() ?? '';
+    if (untilStr.isEmpty) return null;
+    final parts = untilStr.split(':');
+    if (parts.length < 2) return null;
+    final now = DateTime.now();
+    final until = DateTime(now.year, now.month, now.day,
+        int.tryParse(parts[0]) ?? 0, int.tryParse(parts[1]) ?? 0);
+    final diff = until.difference(now);
+    if (diff.isNegative || diff.inMinutes == 0) return null;
+    if (diff.inMinutes < 60) return '⏰ ${diff.inMinutes} dk kaldı';
+    final h = diff.inHours;
+    final m = diff.inMinutes % 60;
+    return '⏰ $h sa${m > 0 ? ' $m dk' : ''} kaldı';
   }
 
   @override
@@ -550,6 +643,17 @@ class _PackageCardState extends State<_PackageCard> {
     final discount = pkg['original_price'] != null && pkg['discounted_price'] != null
         ? (((pkg['original_price'] - pkg['discounted_price']) / pkg['original_price']) * 100).round()
         : 0;
+    final remaining = _remainingTime();
+    final isUrgent = () {
+      final untilStr = pkg['available_until']?.toString() ?? '';
+      if (untilStr.isEmpty) return false;
+      final parts = untilStr.split(':');
+      if (parts.length < 2) return false;
+      final now = DateTime.now();
+      final until = DateTime(now.year, now.month, now.day,
+          int.tryParse(parts[0]) ?? 0, int.tryParse(parts[1]) ?? 0);
+      return until.difference(now).inMinutes <= 30;
+    }();
 
     return Container(
       decoration: BoxDecoration(
@@ -590,6 +694,19 @@ class _PackageCardState extends State<_PackageCard> {
                   child: Text('${pkg['stock']} adet', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF3B82F6))),
                 ),
               ),
+              // Countdown badge
+              if (remaining != null)
+                Positioned(
+                  bottom: 8, left: 10,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: isUrgent ? const Color(0xFFEF4444) : const Color(0xFFF59E0B),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(remaining, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white)),
+                  ),
+                ),
             ],
           ),
 
@@ -605,6 +722,21 @@ class _PackageCardState extends State<_PackageCard> {
                 Text(pkg['name'] ?? '', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF0F172A))),
                 const SizedBox(height: 4),
                 Text(pkg['description'] ?? '', style: const TextStyle(fontSize: 12, color: Color(0xFF94A3B8), height: 1.3), maxLines: 2, overflow: TextOverflow.ellipsis),
+
+                // Rating
+                if ((pkg['rating'] as num?)?.toDouble() != null && (pkg['rating'] as num).toDouble() > 0) ...[
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      const Icon(Icons.star_rounded, color: Color(0xFFFBBF24), size: 14),
+                      const SizedBox(width: 3),
+                      Text(
+                        (pkg['rating'] as num).toDouble().toStringAsFixed(1),
+                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF78716C)),
+                      ),
+                    ],
+                  ),
+                ],
 
                 // Tags
                 if (tags.isNotEmpty) ...[
