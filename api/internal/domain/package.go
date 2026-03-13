@@ -24,6 +24,8 @@ type Package struct {
 	CreatedAt       time.Time       `json:"created_at"`
 	DistanceKm      float64         `json:"distance_km,omitempty"` // Hesaplanan mesafe
 	Rating          float64         `json:"rating,omitempty"`      // Hesaplanan ortalama puan
+	AvailableFrom   string          `json:"available_from,omitempty"`  // "HH:MM" formatı, null=her zaman
+	AvailableUntil  string          `json:"available_until,omitempty"` // "HH:MM" formatı, null=her zaman
 }
 
 // CreatePackageDTO, işletme web üzerinden paket eklerken API'ye gelecek veridir.
@@ -36,6 +38,8 @@ type CreatePackageDTO struct {
 	ImageUrl        string   `json:"image_url"`
 	Category        string   `json:"category"`
 	Tags            []string `json:"tags"`
+	AvailableFrom   string   `json:"available_from"`  // "HH:MM" isteğe bağlı
+	AvailableUntil  string   `json:"available_until"` // "HH:MM" isteğe bağlı
 	// V1'den kalma uyumluluk:
 	BusinessName    string  `json:"business_name"`
 	Latitude        float64 `json:"latitude"`

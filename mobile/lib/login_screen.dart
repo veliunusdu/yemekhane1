@@ -1,8 +1,6 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
-import 'api_config.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'main.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -26,56 +24,45 @@ class _LoginScreenState extends State<LoginScreen> {
     if (!(_formKey.currentState?.validate() ?? false)) return;
     setState(() => _isLoading = true);
 
+    final email = _emailCtrl.text.trim();
+    final password = _passwordCtrl.text.trim();
+
     try {
-      final endpoint = _isSignupMode ? '/api/v1/auth/signup' : '/api/v1/auth/login';
-      final res = await http.post(
-        Uri.parse('$apiBaseUrl$endpoint'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'email':    _emailCtrl.text.trim(),
-          'password': _passwordCtrl.text.trim(),
-        }),
-      );
-
-      if ((res.statusCode == 200 || res.statusCode == 201) && mounted) {
-        if (_isSignupMode) {
-          _showSnack(
-            'Kayıt başarılı! E-postanıza gelen onay linkine tıklayın.',
-            color: const Color(0xFF10B981),
-          );
-          setState(() => _isSignupMode = false);
-        } else {
-          final prefs = await SharedPreferences.getInstance();
-          await prefs.setString('user_email', _emailCtrl.text.trim());
-          try {
-            final data = json.decode(res.body);
-            final token = data['access_token'] as String?;
-            if (token != null && token.isNotEmpty) {
-              await prefs.setString('supabase_token', token);
-            }
-          } catch (_) {}
-
-          if (!mounted) return;
-          Navigator.pushReplacement(
-            context,
-            MaterialPageRoute(builder: (_) => const MainNavigationScreen()),
-          );
-        }
+      if (_isSignupMode) {
+        await Supabase.instance.client.auth.signUp(
+          email: email,
+          password: password,
+        );
+        if (!mounted) return;
+        _showSnack(
+          'Kayıt başarılı! Giriş yapabilirsiniz.',
+          color: const Color(0xFF10B981),
+        );
+        setState(() => _isSignupMode = false);
       } else {
-        String msg = _isSignupMode ? 'Kayıt olunamadı.' : 'Giriş başarısız.';
-        try {
-          final body = json.decode(res.body);
-          final raw = body['error_description'] ?? body['msg'] ?? body['error'] ?? msg;
-          if (raw.contains('Email not confirmed')) {
-            msg = 'E-posta adresinizi onaylayın.';
-          } else if (raw.contains('Invalid login credentials')) {
-            msg = 'E-posta veya şifre hatalı.';
-          } else {
-            msg = raw.toString();
-          }
-        } catch (_) {}
-        if (mounted) _showSnack(msg);
+        final response = await Supabase.instance.client.auth.signInWithPassword(
+          email: email,
+          password: password,
+        );
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('user_email', response.user?.email ?? email);
+
+        if (!mounted) return;
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (_) => const MainNavigationScreen()),
+        );
       }
+    } on AuthException catch (e) {
+      String msg = _isSignupMode ? 'Kayıt olunamadı.' : 'Giriş başarısız.';
+      if (e.message.contains('Email not confirmed')) {
+        msg = 'E-posta adresinizi onaylayın.';
+      } else if (e.message.contains('Invalid login credentials')) {
+        msg = 'E-posta veya şifre hatalı.';
+      } else {
+        msg = e.message;
+      }
+      if (mounted) _showSnack(msg);
     } catch (e) {
       if (mounted) _showSnack('Bağlantı hatası: $e');
     } finally {

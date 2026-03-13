@@ -1,0 +1,46 @@
+{
+  "project_info": {
+    "project_number": "823875695383",
+    "project_id": "todo-71f47",
+    "storage_bucket": "todo-71f47.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:823875695383:android:4887df9f3ecf60d8927d52",
+        "android_client_info": {
+          "package_name": "com.MadeByVeli.Yememhane"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "823875695383-np5jg5ia2dhtusg757634ll6sui764vn.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDchmD3Ipm4lWwInXVjlvFXtAFCsTxgk8s"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "823875695383-np5jg5ia2dhtusg757634ll6sui764vn.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "823875695383-bk1ilrumabsrsn5saeon3qbll81fio15.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.aiStudyBuddy"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
