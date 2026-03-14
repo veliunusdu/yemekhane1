@@ -25,6 +25,7 @@ class _BusinessDetailScreenState extends State<BusinessDetailScreen> {
   bool _isFavorite = false;
   bool _isLoadingFav = true;
   String? _userEmail;
+  String _bizId = '';
 
   List<dynamic> _reviews = [];
   double _avgRating = 0;
@@ -39,6 +40,9 @@ class _BusinessDetailScreenState extends State<BusinessDetailScreen> {
   }
 
   Future<void> _init() async {
+    // 'id' (search sonucu) veya 'business_id' (favoriler) her ikisini de destekle
+    _bizId = ((widget.business['id'] ?? widget.business['business_id']) as String? ?? '');
+
     _userEmail = Supabase.instance.client.auth.currentSession?.user.email;
     if (_userEmail == null || _userEmail!.isEmpty) {
       final prefs = await SharedPreferences.getInstance();
@@ -48,7 +52,7 @@ class _BusinessDetailScreenState extends State<BusinessDetailScreen> {
   }
 
   Future<void> _fetchReviews() async {
-    final bizId = widget.business['id'] as String? ?? '';
+    final bizId = _bizId;
     if (bizId.isEmpty) { setState(() => _isLoadingReviews = false); return; }
     try {
       final res = await http.get(Uri.parse('$apiBaseUrl/api/v1/businesses/$bizId/reviews'));
@@ -71,14 +75,18 @@ class _BusinessDetailScreenState extends State<BusinessDetailScreen> {
   }
 
   Future<void> _fetchPackages() async {
-    final bizId = widget.business['id'] as String? ?? '';
+    final bizId = _bizId;
     try {
       final uri = Uri.parse('$apiBaseUrl/api/v1/packages').replace(
         queryParameters: {'business_id': bizId},
       );
       final res = await http.get(uri);
       if (res.statusCode == 200 && mounted) {
-        setState(() { _packages = json.decode(res.body); _isLoadingPkgs = false; });
+        final body = json.decode(res.body);
+        final List<dynamic> list = (body is Map && body['data'] != null)
+            ? body['data']
+            : (body is List ? body : []);
+        setState(() { _packages = list; _isLoadingPkgs = false; });
       } else {
         setState(() => _isLoadingPkgs = false);
       }
@@ -89,7 +97,7 @@ class _BusinessDetailScreenState extends State<BusinessDetailScreen> {
 
   Future<void> _checkFavorite() async {
     if (_userEmail == null) { setState(() => _isLoadingFav = false); return; }
-    final bizId = widget.business['id'] as String? ?? '';
+    final bizId = _bizId;
     try {
       final res = await http.get(Uri.parse('$apiBaseUrl/api/v1/favorites?email=$_userEmail'));
       if (res.statusCode == 200 && mounted) {
@@ -112,7 +120,7 @@ class _BusinessDetailScreenState extends State<BusinessDetailScreen> {
       final url = Uri.parse('$apiBaseUrl/api/v1/favorites');
       final body = json.encode({
         'user_email': _userEmail,
-        'business_id': widget.business['id'],
+        'business_id': _bizId,
         'business_name': widget.business['name'] ?? '',
       });
       final headers = await authHeaders();
@@ -140,7 +148,7 @@ class _BusinessDetailScreenState extends State<BusinessDetailScreen> {
   void _showReviewSheet() {
     int rating = 5;
     final ctrl = TextEditingController();
-    final bizId = widget.business['id'] as String? ?? '';
+    final bizId = _bizId;
 
     showModalBottomSheet(
       context: context,

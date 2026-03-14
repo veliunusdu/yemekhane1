@@ -321,6 +321,13 @@ func main() {
 	db.Exec("CREATE INDEX IF NOT EXISTS idx_orders_created_at ON orders(created_at DESC);")
 	db.Exec("CREATE INDEX IF NOT EXISTS idx_packages_is_active ON packages(is_active) WHERE is_active = true;")
 	db.Exec("CREATE INDEX IF NOT EXISTS idx_device_tokens_email ON device_tokens(user_email);")
+	// Ölçeklenebilirlik indeksleri (1000+ kayıt için kritik)
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_businesses_owner_email ON businesses(owner_email);")
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_packages_business_id ON packages(business_id);")
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_packages_business_active ON packages(business_id, is_active);")
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_packages_category ON packages(category);")
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_orders_business_package ON orders(package_id);")
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_reviews_business_id ON reviews(business_id);")
 
 	// F. Sipariş Durum Geçmişi (Order Status History)
 	db.Exec(`CREATE TABLE IF NOT EXISTS order_status_history (
@@ -414,6 +421,51 @@ func main() {
 		AllowMethods: "GET,POST,HEAD,PUT,DELETE,PATCH,OPTIONS",
 		AllowHeaders: "Origin, Content-Type, Accept, Authorization",
 	}))
+
+	// API Rotası: Yeni İşletme Oluştur (Onboarding)
+	app.Post("/api/v1/business", jwtMiddleware, func(c *fiber.Ctx) error {
+		ownerEmail := c.Locals("user_email").(string)
+
+		// Zaten bu emaile ait işletme var mı?
+		var existingID string
+		err := db.QueryRow("SELECT id FROM businesses WHERE owner_email = $1", ownerEmail).Scan(&existingID)
+		if err == nil {
+			return c.Status(409).JSON(fiber.Map{"error": "Bu hesaba zaten bir işletme bağlı", "business_id": existingID})
+		}
+
+		type CreateBusinessRequest struct {
+			Name      string  `json:"name"`
+			Address   string  `json:"address"`
+			Latitude  float64 `json:"latitude"`
+			Longitude float64 `json:"longitude"`
+			Phone     string  `json:"phone"`
+			Category  string  `json:"category"`
+		}
+		var req CreateBusinessRequest
+		if err := c.BodyParser(&req); err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": "Geçersiz veri"})
+		}
+		if req.Name == "" {
+			return c.Status(400).JSON(fiber.Map{"error": "İşletme adı zorunludur"})
+		}
+
+		newID := uuid.New().String()
+		_, err = db.Exec(`
+			INSERT INTO businesses (id, owner_email, name, address, latitude, longitude, phone, category, is_active, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true, NOW(), NOW())`,
+			newID, ownerEmail, req.Name, req.Address, req.Latitude, req.Longitude, req.Phone, req.Category)
+		if err != nil {
+			log.Println("İşletme oluşturma hatası:", err)
+			return c.Status(500).JSON(fiber.Map{"error": "İşletme oluşturulamadı"})
+		}
+
+		log.Printf("🏪 Yeni işletme oluşturuldu: %s (%s)", req.Name, ownerEmail)
+		return c.Status(201).JSON(fiber.Map{
+			"message":     "İşletme başarıyla oluşturuldu",
+			"business_id": newID,
+			"name":        req.Name,
+		})
+	})
 
 	// API Rotası: İşletme Konumunu Kaydet/Güncelle
 	app.Post("/api/v1/business/location", jwtMiddleware, func(c *fiber.Ctx) error {
@@ -605,6 +657,20 @@ func main() {
 		searchQ := c.Query("q")              // Kelime araması (paket adı / açıklama)
 		catFilter := c.Query("category")     // Kategori filtresi
 
+		// Sayfalama parametreleri
+		page, _ := strconv.Atoi(c.Query("page", "1"))
+		limit, _ := strconv.Atoi(c.Query("limit", "20"))
+		if page < 1 {
+			page = 1
+		}
+		if limit < 1 || limit > 100 {
+			limit = 20
+		}
+		offset := (page - 1) * limit
+
+		// Rating JOIN subquery (N+1 önlemek için)
+		ratingJoin := `LEFT JOIN (SELECT business_id, COALESCE(AVG(rating), 0) as avg_rating FROM reviews GROUP BY business_id) r ON r.business_id = p.business_id`
+
 		var query string
 		var rows *sql.Rows
 		var err error
@@ -618,11 +684,6 @@ func main() {
 				return c.Status(400).JSON(fiber.Map{"error": "Geçersiz konum parametreleri"})
 			}
 
-			// Haversine Formülü — packages ve businesses JOIN işlemi
-			bizClause := ""
-			if bizFilter != "" {
-				bizClause = " AND p.business_id = '" + strings.ReplaceAll(bizFilter, "'", "") + "'"
-			}
 			query = `
 				SELECT * FROM (
 					SELECT
@@ -636,48 +697,59 @@ func main() {
 								COS(RADIANS(b.longitude) - RADIANS($2)) +
 								SIN(RADIANS($1)) * SIN(RADIANS(b.latitude))
 							)
-						) AS distance_km
+						) AS distance_km,
+						COALESCE(r.avg_rating, 0) AS avg_rating
 					FROM packages p
 					JOIN businesses b ON p.business_id = b.id
+					` + ratingJoin + `
 					WHERE p.is_active = true AND b.latitude != 0 AND b.longitude != 0
 					  AND (p.available_from IS NULL OR p.available_until IS NULL
 					       OR (CURRENT_TIME AT TIME ZONE 'Europe/Istanbul') BETWEEN p.available_from AND p.available_until)
 					  AND ($4 = '' OR p.name ILIKE '%' || $4 || '%' OR p.description ILIKE '%' || $4 || '%')
-					  AND ($5 = '' OR p.category = $5)` + bizClause + `
+					  AND ($5 = '' OR p.category = $5)
+					  AND ($6 = '' OR p.business_id = $6)
 				) AS results
 				WHERE results.distance_km <= $3
-				ORDER BY results.distance_km ASC`
-			rows, err = db.Query(query, lat, lon, radius, searchQ, catFilter)
+				ORDER BY results.distance_km ASC
+				LIMIT $7 OFFSET $8`
+			rows, err = db.Query(query, lat, lon, radius, searchQ, catFilter, bizFilter, limit, offset)
 		} else {
-			// Konum yoksa tüm aktif paketleri getir
 			if bizFilter != "" {
 				query = `
 					SELECT p.id, p.business_id, b.name as business_name, b.latitude, b.longitude, p.name, p.description, p.original_price, p.discounted_price, p.stock, p.is_active, p.image_url, p.category, p.tags,
 					  COALESCE(p.available_from::text, '') AS available_from,
 					  COALESCE(p.available_until::text, '') AS available_until,
-					  0 AS distance_km
+					  0 AS distance_km,
+					  COALESCE(r.avg_rating, 0) AS avg_rating
 					FROM packages p
 					JOIN businesses b ON p.business_id = b.id
+					` + ratingJoin + `
 					WHERE p.is_active = true AND p.business_id = $1
 					  AND (p.available_from IS NULL OR p.available_until IS NULL
 					       OR (CURRENT_TIME AT TIME ZONE 'Europe/Istanbul') BETWEEN p.available_from AND p.available_until)
 					  AND ($2 = '' OR p.name ILIKE '%' || $2 || '%' OR p.description ILIKE '%' || $2 || '%')
-					  AND ($3 = '' OR p.category = $3)`
-				rows, err = db.Query(query, bizFilter, searchQ, catFilter)
+					  AND ($3 = '' OR p.category = $3)
+					ORDER BY p.created_at DESC
+					LIMIT $4 OFFSET $5`
+				rows, err = db.Query(query, bizFilter, searchQ, catFilter, limit, offset)
 			} else {
 				query = `
 					SELECT p.id, p.business_id, b.name as business_name, b.latitude, b.longitude, p.name, p.description, p.original_price, p.discounted_price, p.stock, p.is_active, p.image_url, p.category, p.tags,
 					  COALESCE(p.available_from::text, '') AS available_from,
 					  COALESCE(p.available_until::text, '') AS available_until,
-					  0 AS distance_km
+					  0 AS distance_km,
+					  COALESCE(r.avg_rating, 0) AS avg_rating
 					FROM packages p
 					JOIN businesses b ON p.business_id = b.id
+					` + ratingJoin + `
 					WHERE p.is_active = true
 					  AND (p.available_from IS NULL OR p.available_until IS NULL
 					       OR (CURRENT_TIME AT TIME ZONE 'Europe/Istanbul') BETWEEN p.available_from AND p.available_until)
 					  AND ($1 = '' OR p.name ILIKE '%' || $1 || '%' OR p.description ILIKE '%' || $1 || '%')
-					  AND ($2 = '' OR p.category = $2)`
-				rows, err = db.Query(query, searchQ, catFilter)
+					  AND ($2 = '' OR p.category = $2)
+					ORDER BY p.created_at DESC
+					LIMIT $3 OFFSET $4`
+				rows, err = db.Query(query, searchQ, catFilter, limit, offset)
 			}
 		}
 
@@ -691,20 +763,19 @@ func main() {
 		for rows.Next() {
 			var p domain.Package
 			var tagsStr string
-			if err := rows.Scan(&p.ID, &p.BusinessID, &p.BusinessName, &p.Latitude, &p.Longitude, &p.Name, &p.Description, &p.OriginalPrice, &p.DiscountedPrice, &p.Stock, &p.IsActive, &p.ImageUrl, &p.Category, &tagsStr, &p.AvailableFrom, &p.AvailableUntil, &p.DistanceKm); err != nil {
+			if err := rows.Scan(&p.ID, &p.BusinessID, &p.BusinessName, &p.Latitude, &p.Longitude, &p.Name, &p.Description, &p.OriginalPrice, &p.DiscountedPrice, &p.Stock, &p.IsActive, &p.ImageUrl, &p.Category, &tagsStr, &p.AvailableFrom, &p.AvailableUntil, &p.DistanceKm, &p.Rating); err != nil {
 				log.Println("Satır okuma hatası:", err)
 				continue
 			}
 			p.Tags = json.RawMessage(tagsStr)
-
-			// V2 Ortalama Puan (Rating) Subquery
-			db.QueryRow("SELECT COALESCE(AVG(rating), 0) FROM reviews WHERE business_id = $1", p.BusinessID).Scan(&p.Rating)
-
 			packages = append(packages, p)
 		}
 
-		// Listeyi JSON olarak geri dön
-		return c.JSON(packages)
+		return c.JSON(fiber.Map{
+			"data":  packages,
+			"page":  page,
+			"limit": limit,
+		})
 	})
 
 	// API Rotası 4: İşletme İçin Gelen Siparişleri Listele
@@ -715,14 +786,25 @@ func main() {
 			return c.Status(403).JSON(fiber.Map{"error": "Bu hesaba bağlı işletme bulunamadı"})
 		}
 
-		query := `
-			SELECT o.id, p.name, o.buyer_email, o.status, o.created_at 
-			FROM orders o 
-			JOIN packages p ON o.package_id = p.id 
-			WHERE p.business_id = $1
-			ORDER BY o.created_at DESC`
+		pageNum, _ := strconv.Atoi(c.Query("page", "1"))
+		limitNum, _ := strconv.Atoi(c.Query("limit", "20"))
+		if pageNum < 1 {
+			pageNum = 1
+		}
+		if limitNum < 1 || limitNum > 100 {
+			limitNum = 20
+		}
+		offsetNum := (pageNum - 1) * limitNum
 
-		rows, err := db.Query(query, businessID)
+		query := `
+			SELECT o.id, p.name, o.buyer_email, o.status, o.created_at
+			FROM orders o
+			JOIN packages p ON o.package_id = p.id
+			WHERE p.business_id = $1
+			ORDER BY o.created_at DESC
+			LIMIT $2 OFFSET $3`
+
+		rows, err := db.Query(query, businessID, limitNum, offsetNum)
 		if err != nil {
 			return c.Status(500).JSON(fiber.Map{"error": "Siparişler getirilemedi"})
 		}
@@ -752,7 +834,11 @@ func main() {
 			orders = append(orders, o)
 		}
 
-		return c.JSON(orders)
+		return c.JSON(fiber.Map{
+			"data":  orders,
+			"page":  pageNum,
+			"limit": limitNum,
+		})
 	})
 
 	// API Rotası 5: Giriş Yap (Supabase Auth Proxy)
@@ -1227,6 +1313,16 @@ func main() {
 			return c.Status(400).JSON(fiber.Map{"error": "email parametresi gerekli"})
 		}
 
+		ordersPage, _ := strconv.Atoi(c.Query("page", "1"))
+		ordersLimit, _ := strconv.Atoi(c.Query("limit", "20"))
+		if ordersPage < 1 {
+			ordersPage = 1
+		}
+		if ordersLimit < 1 || ordersLimit > 100 {
+			ordersLimit = 20
+		}
+		ordersOffset := (ordersPage - 1) * ordersLimit
+
 		rows, err := db.Query(`
 			SELECT o.id, o.package_id,
 				COALESCE(o.package_name, p.name, o.package_id::text) AS display_name,
@@ -1239,7 +1335,8 @@ func main() {
 			LEFT JOIN packages p ON o.package_id = p.id
 			WHERE o.buyer_email = $1
 			ORDER BY o.created_at DESC
-		`, buyerEmail)
+			LIMIT $2 OFFSET $3
+		`, buyerEmail, ordersLimit, ordersOffset)
 
 		if err != nil {
 			log.Println("Siparişleri çekerken hata:", err)
@@ -1395,12 +1492,23 @@ func main() {
 			return c.Status(403).JSON(fiber.Map{"error": "Bu hesaba bağlı işletme bulunamadı"})
 		}
 
+		revPage, _ := strconv.Atoi(c.Query("page", "1"))
+		revLimit, _ := strconv.Atoi(c.Query("limit", "20"))
+		if revPage < 1 {
+			revPage = 1
+		}
+		if revLimit < 1 || revLimit > 100 {
+			revLimit = 20
+		}
+		revOffset := (revPage - 1) * revLimit
+
 		rows, err := db.Query(`
 			SELECT r.id, r.order_id, r.user_email, r.rating, r.comment, r.created_at
 			FROM reviews r
 			WHERE r.business_id = $1
 			ORDER BY r.created_at DESC
-		`, businessID)
+			LIMIT $2 OFFSET $3
+		`, businessID, revLimit, revOffset)
 		if err != nil {
 			log.Println("Reviews sorgu hatası:", err)
 			return c.Status(500).JSON(fiber.Map{"error": "Değerlendirmeler getirilemedi"})

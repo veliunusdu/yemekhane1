@@ -111,7 +111,6 @@ class _LoginScreenState extends State<LoginScreen> {
                         width: 80,
                         height: 80,
                         decoration: BoxDecoration(
-                          color: const Color(0xFFFFF7ED),
                           borderRadius: BorderRadius.circular(24),
                           boxShadow: [
                             BoxShadow(
@@ -121,8 +120,9 @@ class _LoginScreenState extends State<LoginScreen> {
                             ),
                           ],
                         ),
-                        child: const Center(
-                          child: Text('🍱', style: TextStyle(fontSize: 40)),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(24),
+                          child: Image.asset('assets/images/Yemekhane_cover.png', fit: BoxFit.cover),
                         ),
                       ),
                       const SizedBox(height: 20),
@@ -188,7 +188,8 @@ class _LoginScreenState extends State<LoginScreen> {
                   controller: _emailCtrl,
                   keyboardType: TextInputType.emailAddress,
                   textInputAction: TextInputAction.next,
-                  style: const TextStyle(fontSize: 15, color: Color(0xFF0F172A)),
+                  cursorColor: const Color(0xFFF97316),
+                  style: const TextStyle(fontSize: 15, color: Color(0xFF0F172A), fontWeight: FontWeight.w500),
                   validator: (v) {
                     if (v == null || v.trim().isEmpty) return 'E-posta gerekli';
                     if (!v.contains('@')) return 'Geçerli bir e-posta girin';
@@ -210,7 +211,8 @@ class _LoginScreenState extends State<LoginScreen> {
                   obscureText: _obscurePass,
                   textInputAction: TextInputAction.done,
                   onFieldSubmitted: (_) => _submit(),
-                  style: const TextStyle(fontSize: 15, color: Color(0xFF0F172A)),
+                  cursorColor: const Color(0xFFF97316),
+                  style: const TextStyle(fontSize: 15, color: Color(0xFF0F172A), fontWeight: FontWeight.w500),
                   validator: (v) {
                     if (v == null || v.isEmpty) return 'Şifre gerekli';
                     if (v.length < 6) return 'En az 6 karakter';
@@ -304,7 +306,7 @@ class _LoginScreenState extends State<LoginScreen> {
   }) {
     return InputDecoration(
       hintText: hint,
-      hintStyle: const TextStyle(color: Color(0xFFCBD5E1), fontSize: 14),
+      hintStyle: const TextStyle(color: Color(0xFFADB5BD), fontSize: 14),
       prefixIcon: Padding(
         padding: const EdgeInsets.only(left: 14, right: 10),
         child: Icon(icon, size: 20, color: const Color(0xFF94A3B8)),
@@ -312,15 +314,15 @@ class _LoginScreenState extends State<LoginScreen> {
       prefixIconConstraints: const BoxConstraints(minWidth: 0, minHeight: 0),
       suffixIcon: suffix,
       filled: true,
-      fillColor: const Color(0xFFF8FAFC),
+      fillColor: Colors.white,
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(14),
-        borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
+        borderSide: const BorderSide(color: Color(0xFFCBD5E1)),
       ),
       enabledBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(14),
-        borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
+        borderSide: const BorderSide(color: Color(0xFFCBD5E1)),
       ),
       focusedBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(14),

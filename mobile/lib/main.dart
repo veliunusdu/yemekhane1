@@ -53,7 +53,6 @@ Future<void> main() async {
         ?.createNotificationChannel(fcmChannel);
 
     await _initLocalNotifications();
-    await _setupFCM();
   }
 
   // Supabase başlat
@@ -62,6 +61,10 @@ Future<void> main() async {
     anonKey:
         'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imhub3Nrc2hybmFjdHdjZXh3dGpvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI2NDg1NzgsImV4cCI6MjA4ODIyNDU3OH0.8AbxhRwriiGhkNzWaKKfj39xSR8oulHSY2Q0gvPECeg',
   );
+
+  if (!kIsWeb) {
+    await _setupFCM();
+  }
 
   runApp(const YemekhaneApp());
 }
@@ -366,7 +369,11 @@ class _PackagesScreenState extends State<PackagesScreen> {
       );
       final res = await http.get(uri);
       if (res.statusCode == 200) {
-        setState(() { packages = json.decode(res.body) ?? []; isLoading = false; });
+        final body = json.decode(res.body);
+        final List<dynamic> list = (body is Map && body['data'] != null)
+            ? body['data']
+            : (body is List ? body : []);
+        setState(() { packages = list; isLoading = false; });
       } else {
         setState(() => isLoading = false);
       }

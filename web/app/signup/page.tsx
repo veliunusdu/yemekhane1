@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import Image from "next/image";
 import { supabase } from "../../lib/supabaseClient";
 import Link from "next/link";
 
@@ -36,8 +37,8 @@ export default function SignupPage() {
     if (error) {
       setError(error.message);
     } else if (data.session) {
-      // Email confirmation disabled — logged in immediately
-      router.push("/");
+      // Email confirmation disabled — yeni işletme için onboarding'e yönlendir
+      router.push("/onboarding");
     } else {
       setSuccess(true);
     }
@@ -74,8 +75,15 @@ export default function SignupPage() {
         className="bg-white rounded-2xl border border-gray-100 p-8 w-full max-w-sm space-y-4 shadow-sm"
       >
         <div className="text-center mb-6">
-          <div className="w-12 h-12 bg-orange-100 text-orange-600 rounded-xl flex items-center justify-center mx-auto mb-3 text-2xl">
-            🍱
+          <div className="w-16 h-16 mx-auto mb-3 rounded-xl overflow-hidden shadow-md">
+            <Image
+              src="/yemekhane-logo.png"
+              alt="Yemekhane Logo"
+              width={64}
+              height={64}
+              priority
+              className="w-full h-full object-cover"
+            />
           </div>
           <h1 className="text-xl font-semibold text-gray-900">İşletme Hesabı Oluştur</h1>
           <p className="text-sm text-gray-500 mt-1">Yemekhane platformuna katılın</p>
@@ -93,7 +101,7 @@ export default function SignupPage() {
             onChange={(e) => setEmail(e.target.value)}
             required
             placeholder="ornek@isletme.com"
-            className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400"
+            className="w-full bg-white border border-gray-300 rounded-xl px-4 py-3 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-transparent"
           />
         </div>
         
@@ -106,7 +114,7 @@ export default function SignupPage() {
             required
             minLength={6}
             placeholder="••••••••"
-            className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400"
+            className="w-full bg-white border border-gray-300 rounded-xl px-4 py-3 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-transparent"
           />
         </div>
 

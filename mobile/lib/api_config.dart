@@ -5,9 +5,9 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 /// Returns the correct API base URL depending on the platform.
 String get apiBaseUrl {
   if (!kIsWeb && Platform.isAndroid) {
-    return 'http://127.0.0.1:3001';
+    return 'http://10.39.193.216:3001';
   }
-  return 'http://127.0.0.1:3001';
+  return 'http://10.39.193.216:3001';
 }
 
 /// Returns HTTP headers with the current Supabase session token.

@@ -68,13 +68,16 @@ class _MapScreenState extends State<MapScreen> {
   Future<void> _fetchPackages() async {
     setState(() => isLoading = true);
     try {
-      String url = '$apiBaseUrl/api/v1/packages';
+      String url = '$apiBaseUrl/api/v1/packages?limit=50';
       if (userLocation != null) {
-        url += '?lat=${userLocation!.latitude}&lon=${userLocation!.longitude}&radius=${selectedRadius.toInt()}';
+        url += '&lat=${userLocation!.latitude}&lon=${userLocation!.longitude}&radius=${selectedRadius.toInt()}';
       }
       final res = await http.get(Uri.parse(url));
       if (res.statusCode == 200) {
-        setState(() { packages = json.decode(res.body) ?? []; isLoading = false; });
+        final body = json.decode(res.body);
+        // Yeni paginated response: { data: [...], page: 1, limit: 50 }
+        final List<dynamic> list = (body is Map && body['data'] != null) ? body['data'] : (body is List ? body : []);
+        setState(() { packages = list; isLoading = false; });
       } else {
         setState(() => isLoading = false);
       }
@@ -82,6 +85,18 @@ class _MapScreenState extends State<MapScreen> {
       debugPrint('[MAP] Hata: $e');
       setState(() => isLoading = false);
     }
+  }
+
+  /// İşletme başına paketleri grupla — aynı konumda tek marker göster.
+  /// 1000 pakette bile yalnızca N_işletme kadar marker oluşur.
+  Map<String, List<dynamic>> _groupByBusiness() {
+    final Map<String, List<dynamic>> groups = {};
+    for (final pkg in packages) {
+      final biz = pkg['business_id']?.toString() ?? '';
+      if (biz.isEmpty) continue;
+      groups.putIfAbsent(biz, () => []).add(pkg);
+    }
+    return groups;
   }
 
   List<Marker> _buildMarkers() {
@@ -103,28 +118,47 @@ class _MapScreenState extends State<MapScreen> {
       ));
     }
 
-    for (final pkg in packages) {
-      final lat = (pkg['latitude'] as num?)?.toDouble() ?? 0.0;
-      final lon = (pkg['longitude'] as num?)?.toDouble() ?? 0.0;
+    // Grupla: her işletme için tek marker
+    final groups = _groupByBusiness();
+    for (final entry in groups.entries) {
+      final pkgList = entry.value;
+      final first = pkgList.first;
+      final lat = (first['latitude'] as num?)?.toDouble() ?? 0.0;
+      final lon = (first['longitude'] as num?)?.toDouble() ?? 0.0;
       if (lat == 0.0 && lon == 0.0) continue;
+      final count = pkgList.length;
 
       markers.add(Marker(
         point: LatLng(lat, lon),
-        width: 64, height: 72,
+        width: 64, height: 76,
         child: GestureDetector(
-          onTap: () => _showDetail(pkg),
+          onTap: () => count == 1 ? _showDetail(first) : _showBusinessPackages(pkgList),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Container(
-                width: 44, height: 44,
-                decoration: BoxDecoration(
-                  color: _orange,
-                  shape: BoxShape.circle,
-                  border: Border.all(color: Colors.white, width: 2.5),
-                  boxShadow: [BoxShadow(color: _orange.withOpacity(0.4), blurRadius: 10, offset: const Offset(0, 3))],
-                ),
-                child: const Icon(Icons.fastfood_rounded, color: Colors.white, size: 22),
+              Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  Container(
+                    width: 44, height: 44,
+                    decoration: BoxDecoration(
+                      color: _orange,
+                      shape: BoxShape.circle,
+                      border: Border.all(color: Colors.white, width: 2.5),
+                      boxShadow: [BoxShadow(color: _orange.withValues(alpha: 0.4), blurRadius: 10, offset: const Offset(0, 3))],
+                    ),
+                    child: const Icon(Icons.fastfood_rounded, color: Colors.white, size: 22),
+                  ),
+                  if (count > 1)
+                    Positioned(
+                      right: -4, top: -4,
+                      child: Container(
+                        padding: const EdgeInsets.all(3),
+                        decoration: const BoxDecoration(color: Color(0xFF16A34A), shape: BoxShape.circle),
+                        child: Text('$count', style: const TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: Colors.white)),
+                      ),
+                    ),
+                ],
               ),
               const SizedBox(height: 3),
               Container(
@@ -135,7 +169,7 @@ class _MapScreenState extends State<MapScreen> {
                   boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.12), blurRadius: 4)],
                 ),
                 child: Text(
-                  '₺${pkg['discounted_price']}',
+                  '₺${first['discounted_price']}',
                   style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Color(0xFF16A34A)),
                 ),
               ),
@@ -145,6 +179,36 @@ class _MapScreenState extends State<MapScreen> {
       ));
     }
     return markers;
+  }
+
+  void _showBusinessPackages(List<dynamic> pkgList) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => Container(
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(pkgList.first['business_name'] ?? '', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 12),
+            ...pkgList.map((pkg) => ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.fastfood_rounded, color: _orange),
+              title: Text(pkg['name'] ?? ''),
+              subtitle: Text('₺${pkg['discounted_price']}', style: const TextStyle(color: Color(0xFF16A34A), fontWeight: FontWeight.bold)),
+              onTap: () { Navigator.pop(context); _showDetail(pkg); },
+            )),
+          ],
+        ),
+      ),
+    );
   }
 
   void _showDetail(dynamic pkg) {

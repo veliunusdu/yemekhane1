@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import Image from "next/image";
 import { supabase } from "../../lib/supabaseClient";
 
 const ERROR_MESSAGES: Record<string, string> = {
@@ -46,7 +47,16 @@ export default function LoginPage() {
         className="bg-white rounded-2xl border border-gray-100 p-8 w-full max-w-sm space-y-4 shadow-sm"
       >
         <div className="text-center mb-2">
-          <div className="w-11 h-11 bg-orange-100 text-orange-600 rounded-xl flex items-center justify-center mx-auto mb-3 text-2xl">🍱</div>
+          <div className="w-20 h-20 mx-auto mb-3 rounded-xl overflow-hidden shadow-md">
+            <Image
+              src="/yemekhane-logo.png"
+              alt="Yemekhane Logo"
+              width={80}
+              height={80}
+              priority
+              className="w-full h-full object-cover"
+            />
+          </div>
           <h1 className="text-xl font-semibold text-gray-900">İşletme Girişi</h1>
           <p className="text-xs text-gray-400 mt-1">İşletme yönetim paneline giriş yapın</p>
         </div>
@@ -60,7 +70,7 @@ export default function LoginPage() {
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             required
-            className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400"
+            className="w-full bg-white border border-gray-300 rounded-xl px-4 py-3 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-transparent"
           />
         </div>
         <div>
@@ -70,7 +80,7 @@ export default function LoginPage() {
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             required
-            className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400"
+            className="w-full bg-white border border-gray-300 rounded-xl px-4 py-3 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-transparent"
           />
         </div>
         <button

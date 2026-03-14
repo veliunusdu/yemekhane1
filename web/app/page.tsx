@@ -124,7 +124,7 @@ export default function Home() {
 
   // ── Fetchers ──
   const fetchOrders = useCallback(async () => {
-    try { const r = await authFetch(`${API_URL}/api/v1/business/orders`); if (r.ok) setOrders((await r.json()) || []); } catch { /* */ }
+    try { const r = await authFetch(`${API_URL}/api/v1/business/orders`); if (r.ok) { const d = await r.json(); setOrders(Array.isArray(d) ? d : (d.data || [])); } } catch { /* */ }
   }, [authFetch]);
 
   const fetchLocation = useCallback(async () => {
@@ -182,7 +182,12 @@ export default function Home() {
     try {
       const { data: { session } } = await supabase.auth.getSession();
       const currentEmail = session?.user.email ?? "";
-      const { data } = await supabase.from("businesses").select("*").limit(1).single();
+      if (!currentEmail) return;
+      const { data } = await supabase
+        .from("businesses")
+        .select("*")
+        .eq("owner_email", currentEmail)
+        .maybeSingle();
       if (data) {
         setBizId(data.id);
         setBizInfo({
@@ -195,13 +200,12 @@ export default function Home() {
           category:    data.category    || "",
           website:     data.website     || "",
         });
-        // Link owner_email if not set yet
-        if (!data.owner_email && currentEmail) {
-          await supabase.from("businesses").update({ owner_email: currentEmail }).eq("id", data.id);
-        }
+      } else {
+        // İşletme henüz oluşturulmamış — onboarding'e yönlendir
+        router.replace("/onboarding");
       }
     } catch { /* */ } finally { setBizInfoLoading(false); }
-  }, []);
+  }, [router]);
 
   const saveBizInfo = async () => {
     if (!bizId) return;
@@ -232,10 +236,12 @@ export default function Home() {
     if (!authChecked) return;
     fetchOrders(); fetchLocation(); fetchStats(); fetchReviews(); fetchBizInfo(); fetchMyPackages();
     const ch = supabase.channel("biz-orders")
-      .on("postgres_changes", { event:"INSERT", schema:"public", table:"orders" }, () => { fetchOrders(); showToast("Yeni sipariş geldi!"); })
+      .on("postgres_changes", { event:"INSERT", schema:"public", table:"orders",
+        ...(bizId ? { filter: `business_id=eq.${bizId}` } : {}) },
+        () => { fetchOrders(); showToast("Yeni sipariş geldi!"); })
       .subscribe();
     return () => { supabase.removeChannel(ch); if (toastTimer.current) clearTimeout(toastTimer.current); };
-  }, [authChecked, authFetch, fetchOrders, fetchLocation, fetchStats, fetchReviews, fetchBizInfo, fetchMyPackages, showToast]);
+  }, [authChecked, bizId, authFetch, fetchOrders, fetchLocation, fetchStats, fetchReviews, fetchBizInfo, fetchMyPackages, showToast]);
 
   useEffect(() => {
     if (activeTab === "stats")    fetchStats();
