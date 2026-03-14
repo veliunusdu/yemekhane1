@@ -6,6 +6,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../api_config.dart';
 import '../login_screen.dart';
 import '../main.dart';
+import 'impact_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -23,6 +24,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
   int _totalOrders = 0;
   int _completedOrders = 0;
   double _savedFoodKg = 0.0;
+  double _co2AvoidedKg = 0.0;
+  double _moneySaved = 0.0;
 
   // Edit mode
   bool _isEditing = false;
@@ -70,6 +73,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
           _totalOrders = data['total_orders'] ?? 0;
           _completedOrders = data['completed_orders'] ?? 0;
           _savedFoodKg = (data['saved_food_kg'] ?? 0.0).toDouble();
+          _co2AvoidedKg = (data['co2_avoided_kg'] ?? 0.0).toDouble();
+          _moneySaved = (data['money_saved'] ?? 0.0).toDouble();
         });
       }
     } catch (_) {}
@@ -196,6 +201,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   _isEditing ? _buildEditForm(isDark) : _buildInfoCard(isDark),
                   const SizedBox(height: 20),
                   _buildStatsRow(isDark),
+                  const SizedBox(height: 20),
+                  _buildImpactCard(isDark),
                   const SizedBox(height: 20),
                   _buildLoyaltyCard(isDark),
                   const SizedBox(height: 32),
@@ -496,6 +503,59 @@ class _ProfileScreenState extends State<ProfileScreen> {
           ),
         );
       }).toList(),
+    );
+  }
+
+  Widget _buildImpactCard(bool isDark) {
+    return GestureDetector(
+      onTap: () => Navigator.push(
+          context, MaterialPageRoute(builder: (_) => const ImpactScreen())),
+      child: Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+            colors: [Color(0xFF16A34A), Color(0xFF15803D)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFF16A34A).withValues(alpha: 0.3),
+              blurRadius: 12,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            const Text('🌍', style: TextStyle(fontSize: 36)),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Katkım',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 16)),
+                  const SizedBox(height: 4),
+                  Text(
+                    '${_savedFoodKg.toStringAsFixed(1)} kg gıda • ₺${_moneySaved.toStringAsFixed(0)} tasarruf',
+                    style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.85),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(Icons.chevron_right_rounded,
+                color: Colors.white70, size: 28),
+          ],
+        ),
+      ),
     );
   }
 

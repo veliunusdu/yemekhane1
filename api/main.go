@@ -1583,11 +1583,20 @@ func main() {
 			fullName, phone, loyalty = "", "", 0
 		}
 
-		// Tamamlanan sipariş sayısı + kurtarılan gıda hesabı
+		// Tamamlanan sipariş sayısı + çevre etkisi hesabı
 		var totalOrders, completedOrders int
 		db.QueryRow("SELECT COUNT(*) FROM orders WHERE buyer_email = $1", email).Scan(&totalOrders)
 		db.QueryRow("SELECT COUNT(*) FROM orders WHERE buyer_email = $1 AND status = 'Teslim Edildi'", email).Scan(&completedOrders)
 		savedFoodKg := float64(completedOrders) * 0.5
+		co2AvoidedKg := savedFoodKg * 2.5
+
+		// Kurtarılan para: tamamlanan siparişlerde orijinal fiyat - indirimli fiyat
+		var moneySaved float64
+		db.QueryRow(`
+			SELECT COALESCE(SUM(p.original_price - p.discounted_price), 0)
+			FROM orders o
+			JOIN packages p ON p.id = o.package_id
+			WHERE o.buyer_email = $1 AND o.status = 'Teslim Edildi'`, email).Scan(&moneySaved)
 
 		return c.JSON(fiber.Map{
 			"email":            email,
@@ -1597,6 +1606,8 @@ func main() {
 			"total_orders":     totalOrders,
 			"completed_orders": completedOrders,
 			"saved_food_kg":    savedFoodKg,
+			"co2_avoided_kg":   co2AvoidedKg,
+			"money_saved":      moneySaved,
 		})
 	})
 
