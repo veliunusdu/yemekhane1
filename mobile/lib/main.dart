@@ -8,6 +8,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:share_plus/share_plus.dart';
 import 'login_screen.dart';
 import 'api_config.dart';
 import 'screens/orders_screen.dart';
@@ -1014,37 +1015,74 @@ class _PackageCardState extends State<_PackageCard> {
               Positioned(
                 top: 16,
                 right: 16,
-                child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: Theme.of(context).brightness == Brightness.dark
-                        ? const Color(0xFF334155).withOpacity(0.95)
-                        : Colors.white.withOpacity(0.95),
-                    borderRadius: BorderRadius.circular(20),
-                    boxShadow: [
-                      BoxShadow(
-                          color: Colors.black.withOpacity(0.1),
-                          blurRadius: 8,
-                          offset: const Offset(0, 2))
-                    ],
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(Icons.inventory_2_rounded,
-                          size: 14, color: Color(0xFF3B82F6)),
-                      const SizedBox(width: 4),
-                      Text('${pkg['stock']} limit',
-                          style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w800,
-                              color: Theme.of(context).brightness ==
-                                      Brightness.dark
-                                  ? Colors.white
-                                  : const Color(0xFF1E293B))),
-                    ],
-                  ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Share Button
+                    Container(
+                      margin: const EdgeInsets.only(right: 8),
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).brightness == Brightness.dark
+                            ? const Color(0xFF334155).withOpacity(0.95)
+                            : Colors.white.withOpacity(0.95),
+                        shape: BoxShape.circle,
+                        boxShadow: [
+                          BoxShadow(
+                              color: Colors.black.withOpacity(0.1),
+                              blurRadius: 8,
+                              offset: const Offset(0, 2))
+                        ],
+                      ),
+                      child: IconButton(
+                        icon: const Icon(Icons.share_rounded,
+                            size: 18, color: Color(0xFFF97316)),
+                        onPressed: () {
+                          final String name = pkg['name'] ?? 'Harika bir paket';
+                          final String price =
+                              pkg['discounted_price']?.toString() ?? '0';
+                          Share.share(
+                            'Yemekhane - $name sadece ₺$price!\nDetaylar için uygulamaya göz at.',
+                            subject: 'Bu paketi görmelisin!',
+                          );
+                        },
+                        constraints: const BoxConstraints(),
+                        padding: const EdgeInsets.all(8),
+                      ),
+                    ),
+                    // Stock Badge
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).brightness == Brightness.dark
+                            ? const Color(0xFF334155).withOpacity(0.95)
+                            : Colors.white.withOpacity(0.95),
+                        borderRadius: BorderRadius.circular(20),
+                        boxShadow: [
+                          BoxShadow(
+                              color: Colors.black.withOpacity(0.1),
+                              blurRadius: 8,
+                              offset: const Offset(0, 2))
+                        ],
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.inventory_2_rounded,
+                              size: 14, color: Color(0xFF3B82F6)),
+                          const SizedBox(width: 4),
+                          Text('${pkg['stock']} limit',
+                              style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w800,
+                                  color: Theme.of(context).brightness ==
+                                          Brightness.dark
+                                      ? Colors.white
+                                      : const Color(0xFF1E293B))),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
               ),
               // Badges Bottom

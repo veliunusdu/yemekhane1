@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:share_plus/share_plus.dart';
 import '../api_config.dart';
 
 const _ink = Color(0xFF0F172A);
@@ -694,21 +695,56 @@ class _PackageCard extends StatelessWidget {
               Positioned(
                 top: 10,
                 right: 10,
-                child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                      color: stock > 0
-                          ? const Color(0xFFDCFCE7)
-                          : const Color(0xFFFFEDED),
-                      borderRadius: BorderRadius.circular(8)),
-                  child: Text('Stok: $stock',
-                      style: TextStyle(
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Share Button
+                    Container(
+                      margin: const EdgeInsets.only(right: 6),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        shape: BoxShape.circle,
+                        boxShadow: [
+                          BoxShadow(
+                              color: Colors.black.withOpacity(0.1),
+                              blurRadius: 4,
+                              offset: const Offset(0, 2))
+                        ],
+                      ),
+                      child: IconButton(
+                        icon: const Icon(Icons.share_rounded,
+                            size: 16, color: _orange),
+                        onPressed: () {
+                          final String name = pkg['name'] ?? 'Harika bir paket';
+                          final String price =
+                              discountedPrice.toStringAsFixed(2);
+                          Share.share(
+                            'Yemekhane - $name sadece ₺$price!\nKaçırmamak için hemen göz at.',
+                            subject: 'Fırsatı Yakala!',
+                          );
+                        },
+                        constraints: const BoxConstraints(),
+                        padding: const EdgeInsets.all(6),
+                      ),
+                    ),
+                    // Stock Badge
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
                           color: stock > 0
-                              ? const Color(0xFF16A34A)
-                              : const Color(0xFFDC2626),
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600)),
+                              ? const Color(0xFFDCFCE7)
+                              : const Color(0xFFFFEDED),
+                          borderRadius: BorderRadius.circular(8)),
+                      child: Text('Stok: $stock',
+                          style: TextStyle(
+                              color: stock > 0
+                                  ? const Color(0xFF16A34A)
+                                  : const Color(0xFFDC2626),
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600)),
+                    ),
+                  ],
                 ),
               ),
             ],
