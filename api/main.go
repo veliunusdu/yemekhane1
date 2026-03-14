@@ -129,6 +129,27 @@ func sendFCMToAll(db *sql.DB, title, body string) {
 	}
 }
 
+// İşletmeyi favorilere ekleyen kullanıcılara gönderir
+func sendFCMToFavorites(db *sql.DB, businessID, title, body string) {
+	rows, err := db.Query(`
+		SELECT dt.fcm_token
+		FROM favorite_shops fs
+		JOIN device_tokens dt ON dt.user_email = fs.user_email
+		WHERE fs.business_id = $1`, businessID)
+	if err != nil {
+		log.Println("⚠️ favorite_shops sorgu hatası:", err)
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var token string
+		if err := rows.Scan(&token); err != nil {
+			continue
+		}
+		sendFCMNotification(token, title, body)
+	}
+}
+
 // rateLimiter, IP başına n istek / window süresi sınırını Redis'te uygular.
 // Redis bağlı değilse şeffaf geçiş yapar (fail-open).
 func rateLimiter(max int, window time.Duration) fiber.Handler {
@@ -592,9 +613,9 @@ func main() {
 			return c.Status(500).JSON(fiber.Map{"error": "Paket kaydedilemedi"})
 		}
 
-		// Push Bildirim: Tüm kullanıcılara yeni paket bildirimi gönder
-		go sendFCMToAll(db,
-			"Yakınında yeni bir paket! 🍱",
+		// Push Bildirim: İşletmeyi favorileyen kullanıcılara yeni paket bildirimi gönder
+		go sendFCMToFavorites(db, businessID,
+			"Favori işletmenden yeni paket! 🍱",
 			pkg.Name+" — sadece ₺"+fmt.Sprintf("%.2f", pkg.DiscountedPrice),
 		)
 
