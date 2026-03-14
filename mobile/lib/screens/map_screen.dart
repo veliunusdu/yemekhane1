@@ -7,10 +7,10 @@ import 'package:latlong2/latlong.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../api_config.dart';
 
-const _ink    = Color(0xFF0F172A);
-const _muted  = Color(0xFF94A3B8);
+const _ink = Color(0xFF0F172A);
+const _muted = Color(0xFF94A3B8);
 const _orange = Color(0xFFF97316);
-const _bg     = Color(0xFFF8FAFC);
+const _bg = Color(0xFFF8FAFC);
 
 class MapScreen extends StatefulWidget {
   const MapScreen({super.key});
@@ -45,14 +45,17 @@ class _MapScreenState extends State<MapScreen> {
   Future<void> _getUserLocation() async {
     bool enabled = await Geolocator.isLocationServiceEnabled();
     if (!enabled) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Konum servisleri kapalı.')),
-      );
+      if (mounted)
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Konum servisleri kapalı.')),
+        );
       return;
     }
     LocationPermission perm = await Geolocator.checkPermission();
-    if (perm == LocationPermission.denied) perm = await Geolocator.requestPermission();
-    if (perm == LocationPermission.denied || perm == LocationPermission.deniedForever) return;
+    if (perm == LocationPermission.denied)
+      perm = await Geolocator.requestPermission();
+    if (perm == LocationPermission.denied ||
+        perm == LocationPermission.deniedForever) return;
 
     try {
       final pos = await Geolocator.getCurrentPosition(
@@ -70,14 +73,20 @@ class _MapScreenState extends State<MapScreen> {
     try {
       String url = '$apiBaseUrl/api/v1/packages?limit=50';
       if (userLocation != null) {
-        url += '&lat=${userLocation!.latitude}&lon=${userLocation!.longitude}&radius=${selectedRadius.toInt()}';
+        url +=
+            '&lat=${userLocation!.latitude}&lon=${userLocation!.longitude}&radius=${selectedRadius.toInt()}';
       }
       final res = await http.get(Uri.parse(url));
       if (res.statusCode == 200) {
         final body = json.decode(res.body);
         // Yeni paginated response: { data: [...], page: 1, limit: 50 }
-        final List<dynamic> list = (body is Map && body['data'] != null) ? body['data'] : (body is List ? body : []);
-        setState(() { packages = list; isLoading = false; });
+        final List<dynamic> list = (body is Map && body['data'] != null)
+            ? body['data']
+            : (body is List ? body : []);
+        setState(() {
+          packages = list;
+          isLoading = false;
+        });
       } else {
         setState(() => isLoading = false);
       }
@@ -101,19 +110,27 @@ class _MapScreenState extends State<MapScreen> {
 
   List<Marker> _buildMarkers() {
     final List<Marker> markers = [];
+    final isDark = Theme.of(context).brightness == Brightness.dark;
 
     if (userLocation != null) {
       markers.add(Marker(
         point: userLocation!,
-        width: 48, height: 48,
+        width: 48,
+        height: 48,
         child: Container(
           decoration: BoxDecoration(
             color: const Color(0xFF3B82F6),
             shape: BoxShape.circle,
             border: Border.all(color: Colors.white, width: 3),
-            boxShadow: [BoxShadow(color: const Color(0xFF3B82F6).withOpacity(0.4), blurRadius: 12, spreadRadius: 2)],
+            boxShadow: [
+              BoxShadow(
+                  color: const Color(0xFF3B82F6).withOpacity(0.4),
+                  blurRadius: 12,
+                  spreadRadius: 2)
+            ],
           ),
-          child: const Icon(Icons.person_rounded, color: Colors.white, size: 20),
+          child:
+              const Icon(Icons.person_rounded, color: Colors.white, size: 20),
         ),
       ));
     }
@@ -130,9 +147,11 @@ class _MapScreenState extends State<MapScreen> {
 
       markers.add(Marker(
         point: LatLng(lat, lon),
-        width: 64, height: 76,
+        width: 64,
+        height: 76,
         child: GestureDetector(
-          onTap: () => count == 1 ? _showDetail(first) : _showBusinessPackages(pkgList),
+          onTap: () =>
+              count == 1 ? _showDetail(first) : _showBusinessPackages(pkgList),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -140,22 +159,35 @@ class _MapScreenState extends State<MapScreen> {
                 clipBehavior: Clip.none,
                 children: [
                   Container(
-                    width: 44, height: 44,
+                    width: 44,
+                    height: 44,
                     decoration: BoxDecoration(
                       color: _orange,
                       shape: BoxShape.circle,
                       border: Border.all(color: Colors.white, width: 2.5),
-                      boxShadow: [BoxShadow(color: _orange.withValues(alpha: 0.4), blurRadius: 10, offset: const Offset(0, 3))],
+                      boxShadow: [
+                        BoxShadow(
+                            color: _orange.withValues(alpha: 0.4),
+                            blurRadius: 10,
+                            offset: const Offset(0, 3))
+                      ],
                     ),
-                    child: const Icon(Icons.fastfood_rounded, color: Colors.white, size: 22),
+                    child: const Icon(Icons.fastfood_rounded,
+                        color: Colors.white, size: 22),
                   ),
                   if (count > 1)
                     Positioned(
-                      right: -4, top: -4,
+                      right: -4,
+                      top: -4,
                       child: Container(
                         padding: const EdgeInsets.all(3),
-                        decoration: const BoxDecoration(color: Color(0xFF16A34A), shape: BoxShape.circle),
-                        child: Text('$count', style: const TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: Colors.white)),
+                        decoration: const BoxDecoration(
+                            color: Color(0xFF16A34A), shape: BoxShape.circle),
+                        child: Text('$count',
+                            style: const TextStyle(
+                                fontSize: 9,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white)),
                       ),
                     ),
                 ],
@@ -164,13 +196,19 @@ class _MapScreenState extends State<MapScreen> {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                 decoration: BoxDecoration(
-                  color: Colors.white,
+                  color: isDark ? const Color(0xFF334155) : Colors.white,
                   borderRadius: BorderRadius.circular(6),
-                  boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.12), blurRadius: 4)],
+                  boxShadow: [
+                    BoxShadow(
+                        color: Colors.black.withOpacity(0.12), blurRadius: 4)
+                  ],
                 ),
                 child: Text(
                   '₺${first['discounted_price']}',
-                  style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Color(0xFF16A34A)),
+                  style: const TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF16A34A)),
                 ),
               ),
             ],
@@ -182,29 +220,38 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   void _showBusinessPackages(List<dynamic> pkgList) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (_) => Container(
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        decoration: BoxDecoration(
+          color: isDark ? const Color(0xFF1E293B) : Colors.white,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
         ),
         padding: const EdgeInsets.all(16),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(pkgList.first['business_name'] ?? '', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            Text(pkgList.first['business_name'] ?? '',
+                style:
+                    TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: isDark ? Colors.white : _ink)),
             const SizedBox(height: 12),
             ...pkgList.map((pkg) => ListTile(
-              contentPadding: EdgeInsets.zero,
-              leading: const Icon(Icons.fastfood_rounded, color: _orange),
-              title: Text(pkg['name'] ?? ''),
-              subtitle: Text('₺${pkg['discounted_price']}', style: const TextStyle(color: Color(0xFF16A34A), fontWeight: FontWeight.bold)),
-              onTap: () { Navigator.pop(context); _showDetail(pkg); },
-            )),
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.fastfood_rounded, color: _orange),
+                  title: Text(pkg['name'] ?? '', style: TextStyle(color: isDark ? Colors.white : _ink)),
+                  subtitle: Text('₺${pkg['discounted_price']}',
+                      style: const TextStyle(
+                          color: Color(0xFF16A34A),
+                          fontWeight: FontWeight.bold)),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _showDetail(pkg);
+                  },
+                )),
           ],
         ),
       ),
@@ -226,17 +273,19 @@ class _MapScreenState extends State<MapScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final center = userLocation ?? const LatLng(41.0082, 28.9784);
-    final validCount = packages.where((p) => (p['latitude'] ?? 0.0) != 0.0).length;
+    final validCount =
+        packages.where((p) => (p['latitude'] ?? 0.0) != 0.0).length;
 
     return Scaffold(
-      backgroundColor: _bg,
+      backgroundColor: isDark ? const Color(0xFF0F172A) : _bg,
       body: SafeArea(
         child: Column(
           children: [
             // ── Header ──
             Container(
-              color: Colors.white,
+              color: isDark ? const Color(0xFF1E293B) : Colors.white,
               padding: const EdgeInsets.fromLTRB(20, 16, 16, 12),
               child: Row(
                 children: [
@@ -244,22 +293,27 @@ class _MapScreenState extends State<MapScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text('Yakınımdaki Paketler',
-                          style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: _ink, letterSpacing: -0.3)),
+                        Text('Yakınımdaki Paketler',
+                            style: TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.bold,
+                                color: isDark ? Colors.white : _ink,
+                                letterSpacing: -0.3)),
                         const SizedBox(height: 2),
                         Text(
-                          isLoading ? 'Yükleniyor...' :
-                            userLocation != null
-                              ? '$validCount dükkan bulundu · ${selectedRadius.toInt()} km içinde'
-                              : '${packages.length} paket listeleniyor',
-                          style: const TextStyle(fontSize: 12, color: _muted),
+                          '$validCount paket bulundu',
+                          style: TextStyle(
+                              fontSize: 13,
+                              color: isDark ? Colors.white70 : _muted,
+                              fontWeight: FontWeight.w500),
                         ),
                       ],
                     ),
                   ),
                   IconButton(
                     onPressed: _fetchPackages,
-                    icon: const Icon(Icons.refresh_rounded, color: Color(0xFF64748B)),
+                    icon: Icon(Icons.refresh_rounded,
+                        color: isDark ? Colors.white70 : const Color(0xFF64748B)),
                   ),
                 ],
               ),
@@ -267,7 +321,7 @@ class _MapScreenState extends State<MapScreen> {
 
             // ── Radius Filter ──
             Container(
-              color: Colors.white,
+              color: isDark ? const Color(0xFF1E293B) : Colors.white,
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
               child: SingleChildScrollView(
                 scrollDirection: Axis.horizontal,
@@ -277,12 +331,20 @@ class _MapScreenState extends State<MapScreen> {
                     return Padding(
                       padding: const EdgeInsets.only(right: 8),
                       child: GestureDetector(
-                        onTap: () { setState(() => selectedRadius = r); _fetchPackages(); },
+                        onTap: () {
+                          setState(() => selectedRadius = r);
+                          _fetchPackages();
+                        },
                         child: AnimatedContainer(
                           duration: const Duration(milliseconds: 150),
-                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 8),
                           decoration: BoxDecoration(
-                            color: selected ? _orange : const Color(0xFFF1F5F9),
+                            color: selected
+                                ? _orange
+                                : (isDark
+                                    ? const Color(0xFF334155)
+                                    : const Color(0xFFF1F5F9)),
                             borderRadius: BorderRadius.circular(20),
                           ),
                           child: Text(
@@ -290,7 +352,11 @@ class _MapScreenState extends State<MapScreen> {
                             style: TextStyle(
                               fontSize: 13,
                               fontWeight: FontWeight.w600,
-                              color: selected ? Colors.white : const Color(0xFF64748B),
+                              color: selected
+                                  ? Colors.white
+                                  : (isDark
+                                      ? Colors.white70
+                                      : const Color(0xFF64748B)),
                             ),
                           ),
                         ),
@@ -304,15 +370,19 @@ class _MapScreenState extends State<MapScreen> {
             // ── Map ──
             Expanded(
               child: isLoading
-                  ? const Center(child: CircularProgressIndicator(color: _orange, strokeWidth: 2))
+                  ? const Center(
+                      child: CircularProgressIndicator(
+                          color: _orange, strokeWidth: 2))
                   : Stack(
                       children: [
                         FlutterMap(
                           mapController: _mapController,
-                          options: MapOptions(initialCenter: center, initialZoom: 13.0),
+                          options: MapOptions(
+                              initialCenter: center, initialZoom: 13.0),
                           children: [
                             TileLayer(
-                              urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                              urlTemplate:
+                                  'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                               userAgentPackageName: 'com.yemekhane.mobile',
                               maxZoom: 19,
                             ),
@@ -321,10 +391,15 @@ class _MapScreenState extends State<MapScreen> {
                         ),
                         // Locate button
                         Positioned(
-                          bottom: 16, right: 16,
+                          bottom: 16,
+                          right: 16,
                           child: FloatingActionButton.small(
-                            onPressed: () async { await _getUserLocation(); _fetchPackages(); },
-                            backgroundColor: Colors.white,
+                            onPressed: () async {
+                              await _getUserLocation();
+                              _fetchPackages();
+                            },
+                            backgroundColor:
+                                isDark ? const Color(0xFF1E293B) : Colors.white,
                             foregroundColor: _orange,
                             elevation: 4,
                             child: const Icon(Icons.my_location_rounded),
@@ -371,18 +446,25 @@ class _PackageBottomSheetState extends State<_PackageBottomSheet> {
 
   Future<void> _checkFavorite() async {
     if (widget.userEmail == null || widget.pkg['business_id'] == null) {
-      setState(() => isLoadingFav = false); return;
+      setState(() => isLoadingFav = false);
+      return;
     }
     try {
-      final res = await http.get(Uri.parse('$apiBaseUrl/api/v1/favorites?email=${widget.userEmail}'));
+      final res = await http.get(
+          Uri.parse('$apiBaseUrl/api/v1/favorites?email=${widget.userEmail}'));
       if (res.statusCode == 200) {
         final favs = json.decode(res.body) as List;
         setState(() {
-          isFavorite = favs.any((f) => f['business_id'] == widget.pkg['business_id']);
+          isFavorite =
+              favs.any((f) => f['business_id'] == widget.pkg['business_id']);
           isLoadingFav = false;
         });
-      } else { setState(() => isLoadingFav = false); }
-    } catch (_) { setState(() => isLoadingFav = false); }
+      } else {
+        setState(() => isLoadingFav = false);
+      }
+    } catch (_) {
+      setState(() => isLoadingFav = false);
+    }
   }
 
   Future<void> _toggleFavorite() async {
@@ -399,11 +481,13 @@ class _PackageBottomSheetState extends State<_PackageBottomSheet> {
       final headers = await authHeaders();
       final res = prev
           ? await http.delete(url, headers: headers, body: body)
-          : await http.post(url,   headers: headers, body: body);
+          : await http.post(url, headers: headers, body: body);
       if ((res.statusCode != 200 && res.statusCode != 201) && mounted) {
         setState(() => isFavorite = prev);
       }
-    } catch (_) { if (mounted) setState(() => isFavorite = prev); }
+    } catch (_) {
+      if (mounted) setState(() => isFavorite = prev);
+    }
   }
 
   Future<void> _buy() async {
@@ -424,18 +508,25 @@ class _PackageBottomSheetState extends State<_PackageBottomSheet> {
         widget.onPurchaseSuccess();
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Siparişiniz alındı! Ödemeyi teslimatta yapabilirsiniz. 🎉'),
+            content: Text(
+                'Siparişiniz alındı! Ödemeyi teslimatta yapabilirsiniz. 🎉'),
             backgroundColor: Colors.green,
             behavior: SnackBarBehavior.floating,
           ),
         );
       } else {
         String errMsg = 'Sipariş oluşturulamadı (${res.statusCode})';
-        try { final d = json.decode(res.body); errMsg = d['error'] ?? errMsg; } catch (_) {}
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(errMsg)));
+        try {
+          final d = json.decode(res.body);
+          errMsg = d['error'] ?? errMsg;
+        } catch (_) {}
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(errMsg)));
       }
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Bağlantı hatası: $e')));
+      if (mounted)
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Bağlantı hatası: $e')));
     } finally {
       if (mounted) setState(() => isBuying = false);
     }
@@ -443,25 +534,34 @@ class _PackageBottomSheetState extends State<_PackageBottomSheet> {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final pkg = widget.pkg;
     final businessName = pkg['business_name'] ?? 'Dükkan';
-    final distance     = (pkg['distance_km'] as num?)?.toDouble() ?? 0.0;
-    final rating       = (pkg['rating'] as num?)?.toDouble() ?? 0.0;
-    final category     = pkg['category']?.toString() ?? '';
-    final tags         = (pkg['tags'] as List?)?.map((e) => e.toString()).toList() ?? [];
+    final distance = (pkg['distance_km'] as num?)?.toDouble() ?? 0.0;
+    final rating = (pkg['rating'] as num?)?.toDouble() ?? 0.0;
+    final category = pkg['category']?.toString() ?? '';
+    final tags =
+        (pkg['tags'] as List?)?.map((e) => e.toString()).toList() ?? [];
 
     return Container(
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF1E293B) : Colors.white,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
       ),
-      padding: EdgeInsets.fromLTRB(20, 12, 20, MediaQuery.of(context).padding.bottom + 24),
+      padding: EdgeInsets.fromLTRB(
+          20, 12, 20, MediaQuery.of(context).padding.bottom + 24),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // Handle
-          Center(child: Container(width: 40, height: 4, decoration: BoxDecoration(color: const Color(0xFFE2E8F0), borderRadius: BorderRadius.circular(2)))),
+          Center(
+              child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                      color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
+                      borderRadius: BorderRadius.circular(2)))),
           const SizedBox(height: 16),
 
           // Shop info row
@@ -469,35 +569,56 @@ class _PackageBottomSheetState extends State<_PackageBottomSheet> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Container(
-                width: 44, height: 44,
-                decoration: BoxDecoration(color: const Color(0xFFFFF7ED), borderRadius: BorderRadius.circular(12)),
-                child: const Icon(Icons.store_rounded, color: _orange, size: 24),
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                    color: isDark ? const Color(0xFF334155) : const Color(0xFFFFF7ED),
+                    borderRadius: BorderRadius.circular(12)),
+                child:
+                    const Icon(Icons.store_rounded, color: _orange, size: 24),
               ),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(businessName, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: _ink)),
+                    Text(businessName,
+                        style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            color: isDark ? Colors.white : _ink)),
                     if (rating > 0)
                       Row(children: [
-                        const Icon(Icons.star_rounded, color: Color(0xFFFBBF24), size: 14),
+                        const Icon(Icons.star_rounded,
+                            color: Color(0xFFFBBF24), size: 14),
                         const SizedBox(width: 3),
-                        Text(rating.toStringAsFixed(1), style: const TextStyle(fontSize: 12, color: _muted, fontWeight: FontWeight.w600)),
+                        Text(rating.toStringAsFixed(1),
+                            style: TextStyle(
+                                fontSize: 12,
+                                color: isDark ? Colors.white70 : _muted,
+                                fontWeight: FontWeight.w600)),
                       ]),
                   ],
                 ),
               ),
               if (distance > 0)
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                  decoration: BoxDecoration(color: const Color(0xFFF1F5F9), borderRadius: BorderRadius.circular(20)),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  decoration: BoxDecoration(
+                      color: isDark ? const Color(0xFF334155) : const Color(0xFFF1F5F9),
+                      borderRadius: BorderRadius.circular(20)),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      const Icon(Icons.near_me_rounded, size: 12, color: _muted),
+                      const Icon(Icons.near_me_rounded,
+                          size: 12, color: _muted),
                       const SizedBox(width: 4),
-                      Text('${distance.toStringAsFixed(1)} km', style: const TextStyle(fontSize: 11, color: _muted, fontWeight: FontWeight.w600)),
+                      Text('${distance.toStringAsFixed(1)} km',
+                          style: TextStyle(
+                              fontSize: 11,
+                              color: isDark ? Colors.white70 : _muted,
+                              fontWeight: FontWeight.w600)),
                     ],
                   ),
                 ),
@@ -506,16 +627,27 @@ class _PackageBottomSheetState extends State<_PackageBottomSheet> {
               GestureDetector(
                 onTap: _toggleFavorite,
                 child: Container(
-                  width: 38, height: 38,
+                  width: 38,
+                  height: 38,
                   decoration: BoxDecoration(
-                    color: isFavorite ? const Color(0xFFFFF1F2) : const Color(0xFFF8FAFC),
+                    color: isFavorite
+                        ? (isDark ? const Color(0xFF4C1D24) : const Color(0xFFFFF1F2))
+                        : (isDark ? const Color(0xFF334155) : const Color(0xFFF8FAFC)),
                     borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: isFavorite ? const Color(0xFFFECACA) : const Color(0xFFE2E8F0)),
+                    border: Border.all(
+                        color: isFavorite
+                            ? (isDark ? const Color(0xFF991B1B) : const Color(0xFFFECACA))
+                            : (isDark ? const Color(0xFF475569) : const Color(0xFFE2E8F0))),
                   ),
                   child: isLoadingFav
-                      ? const Padding(padding: EdgeInsets.all(10), child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFFF43F5E)))
+                      ? const Padding(
+                          padding: EdgeInsets.all(10),
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: Color(0xFFF43F5E)))
                       : Icon(
-                          isFavorite ? Icons.favorite_rounded : Icons.favorite_border_rounded,
+                          isFavorite
+                              ? Icons.favorite_rounded
+                              : Icons.favorite_border_rounded,
                           color: const Color(0xFFF43F5E),
                           size: 18,
                         ),
@@ -524,7 +656,7 @@ class _PackageBottomSheetState extends State<_PackageBottomSheet> {
             ],
           ),
           const SizedBox(height: 16),
-          Divider(color: const Color(0xFFF1F5F9), height: 1),
+          Divider(color: isDark ? const Color(0xFF334155) : const Color(0xFFF1F5F9), height: 1),
           const SizedBox(height: 16),
 
           // Package detail row
@@ -533,43 +665,69 @@ class _PackageBottomSheetState extends State<_PackageBottomSheet> {
             children: [
               // Image
               Container(
-                width: 80, height: 80,
+                width: 80,
+                height: 80,
                 decoration: BoxDecoration(
-                  color: const Color(0xFFFFF7ED),
+                  color: isDark ? const Color(0xFF334155) : const Color(0xFFFFF7ED),
                   borderRadius: BorderRadius.circular(14),
                 ),
                 child: pkg['image_url'] != null && pkg['image_url'] != ''
                     ? ClipRRect(
                         borderRadius: BorderRadius.circular(14),
-                        child: Image.network(pkg['image_url'], fit: BoxFit.cover,
-                            errorBuilder: (_, __, ___) => const Icon(Icons.fastfood_rounded, color: _orange, size: 36)))
-                    : const Icon(Icons.fastfood_rounded, color: _orange, size: 36),
+                        child: Image.network(pkg['image_url'],
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, __, ___) => const Icon(
+                                Icons.fastfood_rounded,
+                                color: _orange,
+                                size: 36)))
+                    : const Icon(Icons.fastfood_rounded,
+                        color: _orange, size: 36),
               ),
               const SizedBox(width: 16),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(pkg['name'] ?? '', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: _ink)),
+                    Text(pkg['name'] ?? '',
+                        style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            color: isDark ? Colors.white : _ink)),
                     if (category.isNotEmpty) ...[
                       const SizedBox(height: 2),
-                      Text(category, style: const TextStyle(fontSize: 11, color: _orange, fontWeight: FontWeight.w600)),
+                      Text(category,
+                          style: const TextStyle(
+                              fontSize: 11,
+                              color: _orange,
+                              fontWeight: FontWeight.w600)),
                     ],
                     const SizedBox(height: 4),
-                    Text(pkg['description'] ?? '', style: const TextStyle(fontSize: 12, color: _muted, height: 1.4), maxLines: 2, overflow: TextOverflow.ellipsis),
+                    Text(pkg['description'] ?? '',
+                        style: TextStyle(
+                            fontSize: 12, color: isDark ? Colors.white70 : _muted, height: 1.4),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis),
                     const SizedBox(height: 8),
                     // Tags
                     if (tags.isNotEmpty)
                       Wrap(
-                        spacing: 4, runSpacing: 4,
-                        children: tags.map((t) => Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFFFF1F2),
-                            borderRadius: BorderRadius.circular(6),
-                          ),
-                          child: Text(t, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: Color(0xFFE11D48))),
-                        )).toList(),
+                        spacing: 4,
+                        runSpacing: 4,
+                        children: tags
+                            .map((t) => Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 8, vertical: 3),
+                                  decoration: BoxDecoration(
+                                    color: isDark ? const Color(0xFF4C1D24) : const Color(0xFFFFF1F2),
+                                    borderRadius: BorderRadius.circular(6),
+                                  ),
+                                  child: Text(t,
+                                      style: const TextStyle(
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.w600,
+                                          color: Color(0xFFE11D48))),
+                                ))
+                            .toList(),
                       ),
                     const SizedBox(height: 8),
                     // Price
@@ -577,15 +735,28 @@ class _PackageBottomSheetState extends State<_PackageBottomSheet> {
                       crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
                         Text('₺${pkg['original_price']}',
-                          style: const TextStyle(decoration: TextDecoration.lineThrough, color: _muted, fontSize: 12)),
+                            style: TextStyle(
+                                decoration: TextDecoration.lineThrough,
+                                color: isDark ? Colors.white38 : _muted,
+                                fontSize: 12)),
                         const SizedBox(width: 8),
                         Text('₺${pkg['discounted_price']}',
-                          style: const TextStyle(color: Color(0xFF16A34A), fontWeight: FontWeight.bold, fontSize: 22)),
+                            style: const TextStyle(
+                                color: Color(0xFF16A34A),
+                                fontWeight: FontWeight.bold,
+                                fontSize: 22)),
                         const Spacer(),
                         Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                          decoration: BoxDecoration(color: const Color(0xFFEFF6FF), borderRadius: BorderRadius.circular(6)),
-                          child: Text('${pkg['stock']} adet', style: const TextStyle(fontSize: 11, color: Color(0xFF3B82F6), fontWeight: FontWeight.w600)),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 3),
+                          decoration: BoxDecoration(
+                              color: const Color(0xFFEFF6FF),
+                              borderRadius: BorderRadius.circular(6)),
+                          child: Text('${pkg['stock']} adet',
+                              style: const TextStyle(
+                                  fontSize: 11,
+                                  color: Color(0xFF3B82F6),
+                                  fontWeight: FontWeight.w600)),
                         ),
                       ],
                     ),
@@ -605,13 +776,20 @@ class _PackageBottomSheetState extends State<_PackageBottomSheet> {
                 backgroundColor: const Color(0xFF16A34A),
                 foregroundColor: Colors.white,
                 padding: const EdgeInsets.symmetric(vertical: 15),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16)),
                 elevation: 0,
                 disabledBackgroundColor: const Color(0xFFD1FAE5),
               ),
               child: isBuying
-                  ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                  : const Text('Hemen Al', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(
+                          color: Colors.white, strokeWidth: 2))
+                  : const Text('Hemen Al',
+                      style:
+                          TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
             ),
           ),
         ],

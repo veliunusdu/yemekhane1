@@ -1,0 +1,769 @@
+class MainNavigationScreen extends StatefulWidget {
+  const MainNavigationScreen({super.key});
+
+  @override
+  State<MainNavigationScreen> createState() => _MainNavigationScreenState();
+}
+
+class _MainNavigationScreenState extends State<MainNavigationScreen> {
+  int _selectedIndex = 0;
+
+  static const List<Widget> _screens = [
+    PackagesScreen(),
+    OrdersScreen(),
+    MapScreen(),
+    FavoritesScreen(),
+    ProfileScreen(),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      extendBody: true,
+      body: IndexedStack(index: _selectedIndex, children: _screens),
+      bottomNavigationBar: SafeArea(
+        child: Container(
+          margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(30),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.08),
+                blurRadius: 20,
+                offset: const Offset(0, 10),
+              )
+            ],
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              _NavItem(icon: Icons.fastfood_rounded, label: 'Menü', index: 0, selected: _selectedIndex, onTap: (i) => setState(() => _selectedIndex = i)),
+              _NavItem(icon: Icons.receipt_long_rounded, label: 'Sipariş', index: 1, selected: _selectedIndex, onTap: (i) => setState(() => _selectedIndex = i)),
+              _NavItem(icon: Icons.map_rounded, label: 'Harita', index: 2, selected: _selectedIndex, onTap: (i) => setState(() => _selectedIndex = i)),
+              _NavItem(icon: Icons.favorite_rounded, label: 'Favoriler', index: 3, selected: _selectedIndex, onTap: (i) => setState(() => _selectedIndex = i)),
+              _NavItem(icon: Icons.person_rounded, label: 'Profil', index: 4, selected: _selectedIndex, onTap: (i) => setState(() => _selectedIndex = i)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _NavItem extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final int index;
+  final int selected;
+  final void Function(int) onTap;
+
+  const _NavItem({
+    required this.icon,
+    required this.label,
+    required this.index,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isActive = index == selected;
+    return GestureDetector(
+      onTap: () => onTap(index),
+      behavior: HitTestBehavior.opaque,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeOutCubic,
+        padding: EdgeInsets.symmetric(horizontal: isActive ? 16 : 10, vertical: 10),
+        decoration: BoxDecoration(
+          color: isActive ? const Color(0xFFF97316).withOpacity(0.12) : Colors.transparent,
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              icon,
+              size: 24,
+              color: isActive ? const Color(0xFFF97316) : const Color(0xFF94A3B8),
+            ),
+            if (isActive) ...[
+              const SizedBox(width: 8),
+              Text(
+                label,
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFFF97316),
+                ),
+              ),
+            ]
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class PackagesScreen extends StatefulWidget {
+  const PackagesScreen({super.key});
+
+  @override
+  State<PackagesScreen> createState() => _PackagesScreenState();
+}
+
+class _PackagesScreenState extends State<PackagesScreen> {
+  List<dynamic> packages = [];
+  bool isLoading = true;
+  String? userEmail;
+
+  final _searchCtrl = TextEditingController();
+  String _searchQ = '';
+  String _selectedCategory = '';
+  Timer? _debounce;
+
+  static const _categories = ['Tümü', 'Yemek', 'Tatlı', 'İçecek', 'Vegan', 'Kahvaltı'];
+
+  @override
+  void initState() {
+    super.initState();
+    _init();
+  }
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    _debounce?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _init() async {
+    final prefs = await SharedPreferences.getInstance();
+    userEmail = prefs.getString('user_email');
+    await fetchPackages();
+  }
+
+  Future<void> fetchPackages() async {
+    setState(() => isLoading = true);
+    try {
+      final uri = Uri.parse("$apiBaseUrl/api/v1/packages").replace(
+        queryParameters: {
+          if (_searchQ.isNotEmpty) 'q': _searchQ,
+          if (_selectedCategory.isNotEmpty) 'category': _selectedCategory,
+        },
+      );
+      final res = await http.get(uri);
+      if (res.statusCode == 200) {
+        final body = json.decode(res.body);
+        final List<dynamic> list = (body is Map && body['data'] != null)
+            ? body['data']
+            : (body is List ? body : []);
+        setState(() { packages = list; isLoading = false; });
+      } else {
+        setState(() => isLoading = false);
+      }
+    } catch (e) {
+      debugPrint("Packages error: $e");
+      setState(() => isLoading = false);
+    }
+  }
+
+  void _onSearchChanged(String val) {
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 400), () {
+      setState(() => _searchQ = val.trim());
+      fetchPackages();
+    });
+  }
+
+  void _selectCategory(String cat) {
+    setState(() => _selectedCategory = cat == 'Tümü' ? '' : cat);
+    fetchPackages();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFFF8FAFC),
+      body: CustomScrollView(
+        slivers: [
+          // ── App Bar ──
+          SliverAppBar(
+            expandedHeight: 120.0,
+            floating: true,
+            pinned: true,
+            elevation: 0,
+            backgroundColor: const Color(0xFFF8FAFC),
+            flexibleSpace: FlexibleSpaceBar(
+              titlePadding: const EdgeInsets.only(left: 20, bottom: 16),
+              title: const Text(
+                'Günün Fırsatları',
+                style: TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.w800,
+                  color: Color(0xFF0F172A),
+                  letterSpacing: -0.5,
+                ),
+              ),
+              background: Container(
+                alignment: Alignment.bottomRight,
+                padding: const EdgeInsets.only(right: 20, bottom: 16),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        shape: BoxShape.circle,
+                        boxShadow: [
+                          BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10, offset: const Offset(0, 4))
+                        ]
+                      ),
+                      child: IconButton(
+                        icon: const Icon(Icons.store_rounded, color: Color(0xFF64748B), size: 20),
+                        tooltip: 'İşletme Ara',
+                        onPressed: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(builder: (_) => const BusinessSearchScreen()),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Container(
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        shape: BoxShape.circle,
+                        boxShadow: [
+                          BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10, offset: const Offset(0, 4))
+                        ]
+                      ),
+                      child: IconButton(
+                        icon: const Icon(Icons.logout_rounded, color: Color(0xFFEF4444), size: 20),
+                        tooltip: 'Çıkış Yap',
+                        onPressed: () async {
+                          final prefs = await SharedPreferences.getInstance();
+                          await prefs.clear();
+                          await Supabase.instance.client.auth.signOut();
+                          if (!context.mounted) return;
+                          Navigator.pushAndRemoveUntil(context,
+                            MaterialPageRoute(builder: (_) => const LoginScreen()), (_) => false);
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+
+          // ── Search & Categories ──
+          SliverToBoxAdapter(
+            child: Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(20),
+                      boxShadow: [
+                        BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 15, offset: const Offset(0, 5))
+                      ]
+                    ),
+                    child: TextField(
+                      controller: _searchCtrl,
+                      onChanged: _onSearchChanged,
+                      style: const TextStyle(fontSize: 15, color: Color(0xFF0F172A), fontWeight: FontWeight.w500),
+                      decoration: InputDecoration(
+                        hintText: 'En lezzetli fırsatları ara...',
+                        hintStyle: const TextStyle(color: Color(0xFF94A3B8), fontSize: 14, fontWeight: FontWeight.w400),
+                        prefixIcon: const Padding(
+                          padding: EdgeInsets.only(left: 16, right: 12),
+                          child: Icon(Icons.search_rounded, size: 22, color: Color(0xFFF97316)),
+                        ),
+                        prefixIconConstraints: const BoxConstraints(minWidth: 40),
+                        suffixIcon: _searchQ.isNotEmpty
+                            ? IconButton(
+                                icon: const Icon(Icons.clear_rounded, size: 20, color: Color(0xFF94A3B8)),
+                                onPressed: () {
+                                  _searchCtrl.clear();
+                                  setState(() => _searchQ = '');
+                                  fetchPackages();
+                                },
+                              )
+                            : null,
+                        border: InputBorder.none,
+                        contentPadding: const EdgeInsets.symmetric(vertical: 16),
+                      ),
+                    ),
+                  ),
+                ),
+                
+                // ── Kategoriler ──
+                SizedBox(
+                  height: 44,
+                  child: ListView.separated(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    scrollDirection: Axis.horizontal,
+                    itemCount: _categories.length,
+                    separatorBuilder: (_, __) => const SizedBox(width: 12),
+                    itemBuilder: (context, i) {
+                      final cat = _categories[i];
+                      final isSelected = (cat == 'Tümü' && _selectedCategory.isEmpty) || cat == _selectedCategory;
+                      return GestureDetector(
+                        onTap: () => _selectCategory(cat),
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 250),
+                          curve: Curves.easeInOutBack,
+                          padding: const EdgeInsets.symmetric(horizontal: 20),
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            color: isSelected ? const Color(0xFFF97316) : Colors.white,
+                            borderRadius: BorderRadius.circular(22),
+                            boxShadow: isSelected ? [
+                              BoxShadow(color: const Color(0xFFF97316).withOpacity(0.3), blurRadius: 8, offset: const Offset(0, 4))
+                            ] : [
+                              BoxShadow(color: Colors.black.withOpacity(0.02), blurRadius: 4, offset: const Offset(0, 2))
+                            ],
+                            border: Border.all(color: isSelected ? Colors.transparent : const Color(0xFFE2E8F0)),
+                          ),
+                          child: Text(
+                            cat,
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+                              color: isSelected ? Colors.white : const Color(0xFF64748B),
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                const SizedBox(height: 20),
+              ],
+            ),
+          ),
+
+          // ── Package List ──
+          if (isLoading)
+            const SliverFillRemaining(
+              child: Center(child: CircularProgressIndicator(color: Color(0xFFF97316), strokeWidth: 3)),
+            )
+          else if (packages.isEmpty)
+            SliverFillRemaining(
+              child: _buildEmpty(),
+            )
+          else
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 100), 
+              sliver: SliverList(
+                delegate: SliverChildBuilderDelegate(
+                  (context, i) => Padding(
+                    padding: const EdgeInsets.only(bottom: 20),
+                    child: _PackageCard(
+                      pkg: packages[i],
+                      userEmail: userEmail,
+                      onSuccess: fetchPackages,
+                    ),
+                  ),
+                  childCount: packages.length,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildEmpty() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Container(
+            width: 80, height: 80,
+            decoration: BoxDecoration(
+              color: const Color(0xFFFFF7ED),
+              borderRadius: BorderRadius.circular(24),
+              boxShadow: [
+                BoxShadow(color: const Color(0xFFF97316).withOpacity(0.1), blurRadius: 20, offset: const Offset(0, 10))
+              ]
+            ),
+            child: const Icon(Icons.search_off_rounded, size: 40, color: Color(0xFFF97316)),
+          ),
+          const SizedBox(height: 24),
+          Text(
+            _searchQ.isNotEmpty || _selectedCategory.isNotEmpty
+                ? 'Sonuç bulunamadı'
+                : 'Şu an fırsat yok',
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF1E293B)),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            _searchQ.isNotEmpty || _selectedCategory.isNotEmpty
+                ? 'Farklı bir arama yapmayı deneyin.'
+                : 'Yeni fırsatlar eklendiğinde burada olacak.',
+            style: const TextStyle(fontSize: 14, color: Color(0xFF64748B)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PackageCard extends StatefulWidget {
+  final dynamic pkg;
+  final String? userEmail;
+  final VoidCallback onSuccess;
+
+  const _PackageCard({required this.pkg, required this.userEmail, required this.onSuccess});
+
+  @override
+  State<_PackageCard> createState() => _PackageCardState();
+}
+
+class _PackageCardState extends State<_PackageCard> {
+  bool isBuying = false;
+
+  Future<void> _buy() async {
+    if (isBuying) return;
+    setState(() => isBuying = true);
+    try {
+      final res = await http.post(
+        Uri.parse("$apiBaseUrl/api/v1/orders"),
+        headers: await authHeaders(),
+        body: json.encode({
+          'package_id': widget.pkg['id'],
+          'buyer_email': widget.userEmail ?? '',
+        }),
+      );
+      if (!mounted) return;
+      if (res.statusCode == 201) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: const Row(
+            children: [
+              Icon(Icons.check_circle_rounded, color: Colors.white),
+              SizedBox(width: 8),
+              Expanded(child: Text('Siparişiniz alındı! Ödemeyi teslimatta yapabilirsiniz. 🎉')),
+            ],
+          ),
+          backgroundColor: const Color(0xFF10B981),
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          margin: const EdgeInsets.all(20),
+          duration: const Duration(seconds: 4),
+        ));
+        widget.onSuccess();
+      } else {
+        String errMsg = "Sipariş oluşturulamadı (${res.statusCode})";
+        try { final d = json.decode(res.body); errMsg = d['error'] ?? errMsg; } catch (_) {}
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(errMsg), backgroundColor: const Color(0xFFEF4444)));
+      }
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Bağlantı hatası: $e"), backgroundColor: const Color(0xFFEF4444)));
+    } finally {
+      if (mounted) setState(() => isBuying = false);
+    }
+  }
+
+  String? _remainingTime() {
+    final untilStr = widget.pkg['available_until']?.toString() ?? '';
+    if (untilStr.isEmpty) return null;
+    final parts = untilStr.split(':');
+    if (parts.length < 2) return null;
+    final now = DateTime.now();
+    final until = DateTime(now.year, now.month, now.day,
+        int.tryParse(parts[0]) ?? 0, int.tryParse(parts[1]) ?? 0);
+    final diff = until.difference(now);
+    if (diff.isNegative || diff.inMinutes == 0) return null;
+    if (diff.inMinutes < 60) return "${diff.inMinutes} dk";
+    final h = diff.inHours;
+    final m = diff.inMinutes % 60;
+    return "$h sa${m > 0 ? " $m dk" : ""}";
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final pkg = widget.pkg;
+    final hasImage = pkg['image_url'] != null && pkg['image_url'] != '';
+    final category = pkg['category']?.toString() ?? '';
+    final tags = (pkg['tags'] as List?)?.map((e) => e.toString()).toList() ?? [];
+    final discount = pkg['original_price'] != null && pkg['discounted_price'] != null
+        ? (((pkg['original_price'] - pkg['discounted_price']) / pkg['original_price']) * 100).round()
+        : 0;
+    final remaining = _remainingTime();
+    final isUrgent = () {
+      final untilStr = pkg['available_until']?.toString() ?? '';
+      if (untilStr.isEmpty) return false;
+      final parts = untilStr.split(':');
+      if (parts.length < 2) return false;
+      final now = DateTime.now();
+      final until = DateTime(now.year, now.month, now.day,
+          int.tryParse(parts[0]) ?? 0, int.tryParse(parts[1]) ?? 0);
+      return until.difference(now).inMinutes <= 30;
+    }();
+
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: [
+          BoxShadow(color: const Color(0xFF0F172A).withOpacity(0.06), blurRadius: 24, offset: const Offset(0, 8))
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // ── Image Section ──
+          Stack(
+            children: [
+              ClipRRect(
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+                child: hasImage
+                    ? Image.network(
+                        pkg['image_url'], 
+                        height: 180, 
+                        width: double.infinity, 
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) => _imagePlaceholder(),
+                      )
+                    : _imagePlaceholder(),
+              ),
+              // Gradient Overlay for readability of badges
+              Positioned.fill(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        Colors.black.withOpacity(0.3),
+                        Colors.transparent,
+                        Colors.black.withOpacity(0.1),
+                      ],
+                      stops: const [0.0, 0.4, 1.0],
+                    ),
+                  ),
+                ),
+              ),
+              // Badges Top Left
+              if (discount > 0)
+                Positioned(
+                  top: 16, left: 16,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFEF4444),
+                      borderRadius: BorderRadius.circular(20),
+                      boxShadow: [BoxShadow(color: const Color(0xFFEF4444).withOpacity(0.4), blurRadius: 8, offset: const Offset(0, 2))],
+                    ),
+                    child: Text('-%$discount', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w900, color: Colors.white, letterSpacing: 0.5)),
+                  ),
+                ),
+              // Badges Top Right
+              Positioned(
+                top: 16, right: 16,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.95),
+                    borderRadius: BorderRadius.circular(20),
+                    boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 8, offset: const Offset(0, 2))],
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.inventory_2_rounded, size: 14, color: Color(0xFF3B82F6)),
+                      const SizedBox(width: 4),
+                      Text('${pkg['stock']} limit', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: Color(0xFF1E293B))),
+                    ],
+                  ),
+                ),
+              ),
+              // Badges Bottom
+              if (remaining != null)
+                Positioned(
+                  bottom: 12, left: 16,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: isUrgent ? const Color(0xFFEF4444) : Colors.black.withOpacity(0.6),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: Colors.white.withOpacity(0.2)),
+                      boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.2), blurRadius: 4, offset: const Offset(0, 2))],
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.timer_rounded, size: 14, color: Colors.white),
+                        const SizedBox(width: 4),
+                        Text(remaining, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.white)),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
+          ),
+
+          // ── Content Section ──
+          Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Category & Rating
+                Row(
+                  children: [
+                    if (category.isNotEmpty)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF97316).withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          category.toUpperCase(),
+                          style: const TextStyle(fontSize: 11, color: Color(0xFFF97316), fontWeight: FontWeight.w800, letterSpacing: 0.5),
+                        ),
+                      ),
+                    const Spacer(),
+                    if ((pkg['rating'] as num?)?.toDouble() != null && (pkg['rating'] as num).toDouble() > 0)
+                      Row(
+                        children: [
+                          const Icon(Icons.star_rounded, color: Color(0xFFFBBF24), size: 16),
+                          const SizedBox(width: 4),
+                          Text(
+                            (pkg['rating'] as num).toDouble().toStringAsFixed(1),
+                            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF475569)),
+                          ),
+                        ],
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                
+                // Title
+                Text(
+                  pkg['name'] ?? '',
+                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: Color(0xFF0F172A), height: 1.3),
+                ),
+                const SizedBox(height: 6),
+                
+                // Description
+                Text(
+                  pkg['description'] ?? '',
+                  style: const TextStyle(fontSize: 14, color: Color(0xFF64748B), height: 1.5),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+
+                // Tags
+                if (tags.isNotEmpty) ...[
+                  const SizedBox(height: 14),
+                  Wrap(
+                    spacing: 8, runSpacing: 8,
+                    children: tags.map((t) => Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF1F5F9),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Text(t, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF475569))),
+                    )).toList(),
+                  ),
+                ],
+
+                const SizedBox(height: 20),
+                const Divider(height: 1, color: Color(0xFFF1F5F9)),
+                const SizedBox(height: 16),
+
+                // Footer (Price & Action)
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (discount > 0)
+                          Text('₺${pkg['original_price']}',
+                            style: const TextStyle(decoration: TextDecoration.lineThrough, color: Color(0xFF94A3B8), fontSize: 13, fontWeight: FontWeight.w500)),
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text('₺', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF16A34A), height: 1.2)),
+                            const SizedBox(width: 2),
+                            Text('${pkg['discounted_price']}', style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w900, color: Color(0xFF16A34A), height: 1)),
+                          ],
+                        ),
+                      ],
+                    ),
+                    const Spacer(),
+                    Container(
+                      width: 140,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(16),
+                        gradient: const LinearGradient(colors: [Color(0xFF22C55E), Color(0xFF16A34A)]),
+                        boxShadow: [
+                          BoxShadow(color: const Color(0xFF22C55E).withOpacity(0.3), blurRadius: 12, offset: const Offset(0, 4))
+                        ]
+                      ),
+                      child: ElevatedButton(
+                        onPressed: isBuying ? null : _buy,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.transparent,
+                          shadowColor: Colors.transparent,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                          elevation: 0,
+                          disabledBackgroundColor: const Color(0xFFD1FAE5).withOpacity(0.5),
+                        ),
+                        child: isBuying
+                            ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2.5))
+                            : const Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(Icons.shopping_bag_rounded, size: 18),
+                                  SizedBox(width: 6),
+                                  Text('Hemen Al', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 14, letterSpacing: 0.3)),
+                                ],
+                              ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _imagePlaceholder() {
+    return Container(
+      height: 180, width: double.infinity,
+      color: const Color(0xFFFFF7ED),
+      child: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                shape: BoxShape.circle,
+                boxShadow: [BoxShadow(color: const Color(0xFFF97316).withOpacity(0.1), blurRadius: 10)]
+              ),
+              child: const Icon(Icons.restaurant_rounded, color: Color(0xFFF97316), size: 36),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}

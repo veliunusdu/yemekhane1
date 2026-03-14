@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../api_config.dart';
 import '../login_screen.dart';
+import '../main.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -56,7 +57,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
     try {
       final headers = await authHeaders();
       final res = await http.get(
-        Uri.parse('$apiBaseUrl/api/v1/users/profile?email=${Uri.encodeComponent(_email!)}'),
+        Uri.parse(
+            '$apiBaseUrl/api/v1/users/profile?email=${Uri.encodeComponent(_email!)}'),
         headers: headers,
       );
       if (res.statusCode == 200) {
@@ -105,7 +107,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   void _showSnack(String msg, Color color) {
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(msg), backgroundColor: color, behavior: SnackBarBehavior.floating),
+      SnackBar(
+          content: Text(msg),
+          backgroundColor: color,
+          behavior: SnackBarBehavior.floating),
     );
   }
 
@@ -116,7 +121,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
         title: const Text('Çıkış Yap'),
         content: const Text('Hesabından çıkmak istiyor musun?'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Vazgeç')),
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Vazgeç')),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
             child: const Text('Çıkış Yap', style: TextStyle(color: Colors.red)),
@@ -138,15 +145,30 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+
     return Scaffold(
-      backgroundColor: const Color(0xFFF8FAFC),
       appBar: AppBar(
-        backgroundColor: Colors.white,
-        surfaceTintColor: Colors.transparent,
         elevation: 0,
-        title: const Text('Profilim', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 18, color: Color(0xFF1E293B))),
+        title: Text('Profilim',
+            style: TextStyle(
+                fontWeight: FontWeight.w700,
+                fontSize: 18,
+                color: isDark ? Colors.white : const Color(0xFF1E293B))),
         centerTitle: true,
         actions: [
+          if (!_isEditing)
+            IconButton(
+              icon: Icon(
+                  isDark ? Icons.light_mode_rounded : Icons.dark_mode_rounded,
+                  color: const Color(0xFFF97316)),
+              onPressed: () {
+                final provider = ThemeProvider.of(context);
+                provider.setThemeMode(
+                    isDark ? ThemeMode.light : ThemeMode.dark);
+              },
+            ),
           if (!_isEditing)
             IconButton(
               icon: const Icon(Icons.edit_rounded, color: Color(0xFFF97316)),
@@ -159,20 +181,23 @@ class _ProfileScreenState extends State<ProfileScreen> {
         ],
       ),
       body: _isLoading
-          ? const Center(child: CircularProgressIndicator(color: Color(0xFFF97316)))
+          ? const Center(
+              child: CircularProgressIndicator(color: Color(0xFFF97316)))
           : RefreshIndicator(
               color: const Color(0xFFF97316),
               onRefresh: _load,
               child: ListView(
                 padding: const EdgeInsets.all(20),
                 children: [
-                  _buildAvatar(),
+                  _buildAvatar(isDark),
                   const SizedBox(height: 24),
-                  _isEditing ? _buildEditForm() : _buildInfoCard(),
+                  _buildThemeSelector(context, isDark),
+                  const SizedBox(height: 16),
+                  _isEditing ? _buildEditForm(isDark) : _buildInfoCard(isDark),
                   const SizedBox(height: 20),
-                  _buildStatsRow(),
+                  _buildStatsRow(isDark),
                   const SizedBox(height: 20),
-                  _buildLoyaltyCard(),
+                  _buildLoyaltyCard(isDark),
                   const SizedBox(height: 32),
                   _buildSignOutButton(),
                 ],
@@ -181,25 +206,63 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  Widget _buildAvatar() {
+  Widget _buildThemeSelector(BuildContext context, bool isDark) {
+    final provider = ThemeProvider.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      decoration: BoxDecoration(
+        color: Theme.of(context).cardColor,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          const Text('Karanlık Mod',
+              style: TextStyle(fontWeight: FontWeight.w600)),
+          Switch(
+            value: isDark,
+            activeColor: const Color(0xFFF97316),
+            onChanged: (val) {
+              provider.setThemeMode(val ? ThemeMode.dark : ThemeMode.light);
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAvatar(bool isDark) {
     final initials = _fullName.isNotEmpty
-        ? _fullName.trim().split(' ').map((w) => w.isNotEmpty ? w[0] : '').take(2).join().toUpperCase()
+        ? _fullName
+            .trim()
+            .split(' ')
+            .map((w) => w.isNotEmpty ? w[0] : '')
+            .take(2)
+            .join()
+            .toUpperCase()
         : (_email?.isNotEmpty == true ? _email![0].toUpperCase() : '?');
     return Center(
       child: Stack(
         children: [
           CircleAvatar(
             radius: 44,
-            backgroundColor: const Color(0xFFFFF7ED),
-            child: Text(initials, style: const TextStyle(fontSize: 30, fontWeight: FontWeight.w700, color: Color(0xFFF97316))),
+            backgroundColor:
+                isDark ? const Color(0xFF334155) : const Color(0xFFFFF7ED),
+            child: Text(initials,
+                style: const TextStyle(
+                    fontSize: 30,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFFF97316))),
           ),
           Positioned(
             bottom: 0,
             right: 0,
             child: Container(
               padding: const EdgeInsets.all(4),
-              decoration: const BoxDecoration(color: Color(0xFFF97316), shape: BoxShape.circle),
-              child: const Icon(Icons.fastfood_rounded, size: 14, color: Colors.white),
+              decoration: const BoxDecoration(
+                  color: Color(0xFFF97316), shape: BoxShape.circle),
+              child: const Icon(Icons.fastfood_rounded,
+                  size: 14, color: Colors.white),
             ),
           ),
         ],
@@ -207,81 +270,128 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  Widget _buildInfoCard() {
+  Widget _buildInfoCard(bool isDark) {
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: isDark ? const Color(0xFF1E293B) : Colors.white,
         borderRadius: BorderRadius.circular(16),
-        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 10, offset: const Offset(0, 2))],
+        boxShadow: isDark
+            ? []
+            : [
+                BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.05),
+                    blurRadius: 10,
+                    offset: const Offset(0, 2))
+              ],
       ),
       child: Column(
         children: [
-          _infoRow(Icons.person_rounded, 'Ad Soyad', _fullName.isNotEmpty ? _fullName : 'Belirtilmedi'),
+          _infoRow(Icons.person_rounded, 'Ad Soyad', _fullName),
           const Divider(height: 24),
           _infoRow(Icons.email_rounded, 'E-posta', _email ?? ''),
           const Divider(height: 24),
-          _infoRow(Icons.phone_rounded, 'Telefon', _phone.isNotEmpty ? _phone : 'Belirtilmedi'),
+          _infoRow(Icons.phone_rounded, 'Telefon', _phone),
         ],
       ),
     );
   }
 
   Widget _infoRow(IconData icon, String label, String value) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    if (_isLoading) {
+      return Row(
+        children: [
+          Icon(icon, size: 24, color: isDark ? Colors.white24 : Colors.grey.shade300),
+          const SizedBox(width: 14),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(width: 60, height: 12, color: isDark ? Colors.white10 : Colors.grey.shade200),
+              const SizedBox(height: 6),
+              Container(width: 120, height: 16, color: isDark ? Colors.white10 : Colors.grey.shade200),
+            ],
+          ),
+        ],
+      );
+    }
     return Row(
       children: [
-        Container(
-          padding: const EdgeInsets.all(8),
-          decoration: BoxDecoration(color: const Color(0xFFFFF7ED), borderRadius: BorderRadius.circular(10)),
-          child: Icon(icon, size: 18, color: const Color(0xFFF97316)),
-        ),
+        Icon(icon, size: 24, color: const Color(0xFFF97316)),
         const SizedBox(width: 14),
         Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(label, style: const TextStyle(fontSize: 11, color: Color(0xFF94A3B8), fontWeight: FontWeight.w500)),
-            Text(value, style: const TextStyle(fontSize: 15, color: Color(0xFF1E293B), fontWeight: FontWeight.w600)),
+            Text(label,
+                style: const TextStyle(
+                    fontSize: 12,
+                    color: Color(0xFF94A3B8),
+                    fontWeight: FontWeight.w500)),
+            Text(value.isEmpty ? 'Belirtilmedi' : value,
+                style: TextStyle(
+                    fontSize: 16,
+                    color: isDark ? Colors.white : const Color(0xFF1E293B),
+                    fontWeight: FontWeight.w500)),
           ],
         ),
       ],
     );
   }
 
-  Widget _buildEditForm() {
+  Widget _buildEditForm(bool isDark) {
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: isDark ? const Color(0xFF1E293B) : Colors.white,
         borderRadius: BorderRadius.circular(16),
-        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 10, offset: const Offset(0, 2))],
+        boxShadow: isDark
+            ? []
+            : [
+                BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.05),
+                    blurRadius: 10,
+                    offset: const Offset(0, 2))
+              ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Text('Profili Düzenle', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16, color: Color(0xFF1E293B))),
+          Text('Profili Düzenle',
+              style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 16,
+                  color: isDark ? Colors.white : const Color(0xFF1E293B))),
           const SizedBox(height: 16),
           TextField(
             controller: _nameCtrl,
-            decoration: _inputDeco('Ad Soyad', Icons.person_rounded),
+            decoration: _inputDeco('Ad Soyad', Icons.person_rounded, isDark),
             textCapitalization: TextCapitalization.words,
+            style: TextStyle(color: isDark ? Colors.white : Colors.black),
           ),
           const SizedBox(height: 12),
           TextField(
             controller: _phoneCtrl,
-            decoration: _inputDeco('Telefon', Icons.phone_rounded),
+            decoration: _inputDeco('Telefon', Icons.phone_rounded, isDark),
             keyboardType: TextInputType.phone,
+            style: TextStyle(color: isDark ? Colors.white : Colors.black),
           ),
           const SizedBox(height: 20),
           Row(
             children: [
               Expanded(
                 child: OutlinedButton(
-                  onPressed: _isSaving ? null : () => setState(() => _isEditing = false),
+                  onPressed: _isSaving
+                      ? null
+                      : () => setState(() => _isEditing = false),
                   style: OutlinedButton.styleFrom(
                     padding: const EdgeInsets.symmetric(vertical: 12),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    side: isDark ? const BorderSide(color: Colors.white24) : null,
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12)),
                   ),
-                  child: const Text('Vazgeç'),
+                  child: Text('Vazgeç',
+                      style: TextStyle(
+                          color: isDark ? Colors.white70 : Colors.black87)),
                 ),
               ),
               const SizedBox(width: 12),
@@ -291,11 +401,19 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFFF97316),
                     padding: const EdgeInsets.symmetric(vertical: 12),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12)),
                   ),
                   child: _isSaving
-                      ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                      : const Text('Kaydet', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: Colors.white))
+                      : const Text('Kaydet',
+                          style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w700)),
                 ),
               ),
             ],
@@ -305,22 +423,36 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  InputDecoration _inputDeco(String hint, IconData icon) {
+  InputDecoration _inputDeco(String hint, IconData icon, bool isDark) {
     return InputDecoration(
       hintText: hint,
+      hintStyle: TextStyle(color: isDark ? Colors.white38 : Colors.grey),
       prefixIcon: Icon(icon, color: const Color(0xFFF97316), size: 20),
       filled: true,
-      fillColor: const Color(0xFFF8FAFC),
-      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+      fillColor: isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC),
+      border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
       contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
     );
   }
 
-  Widget _buildStatsRow() {
+  Widget _buildStatsRow(bool isDark) {
     final items = [
-      {'icon': Icons.receipt_long_rounded, 'value': '$_totalOrders', 'label': 'Toplam Sipariş'},
-      {'icon': Icons.check_circle_rounded, 'value': '$_completedOrders', 'label': 'Tamamlanan'},
-      {'icon': Icons.eco_rounded, 'value': '${_savedFoodKg.toStringAsFixed(1)}kg', 'label': 'Kurtarılan'},
+      {
+        'icon': Icons.receipt_long_rounded,
+        'value': '$_totalOrders',
+        'label': 'Toplam Sipariş'
+      },
+      {
+        'icon': Icons.check_circle_rounded,
+        'value': '$_completedOrders',
+        'label': 'Tamamlanan'
+      },
+      {
+        'icon': Icons.eco_rounded,
+        'value': '${_savedFoodKg.toStringAsFixed(1)}kg',
+        'label': 'Kurtarılan'
+      },
     ];
     return Row(
       children: items.map((item) {
@@ -332,16 +464,33 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ),
             padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 8),
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: isDark ? const Color(0xFF1E293B) : Colors.white,
               borderRadius: BorderRadius.circular(14),
-              boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 8, offset: const Offset(0, 2))],
+              boxShadow: isDark
+                  ? []
+                  : [
+                      BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.05),
+                          blurRadius: 8,
+                          offset: const Offset(0, 2))
+                    ],
             ),
             child: Column(
               children: [
-                Icon(item['icon'] as IconData, color: const Color(0xFFF97316), size: 22),
+                Icon(item['icon'] as IconData,
+                    color: const Color(0xFFF97316), size: 22),
                 const SizedBox(height: 6),
-                Text(item['value'] as String, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 18, color: Color(0xFF1E293B))),
-                Text(item['label'] as String, style: const TextStyle(fontSize: 10, color: Color(0xFF94A3B8), fontWeight: FontWeight.w500), textAlign: TextAlign.center),
+                Text(item['value'] as String,
+                    style: TextStyle(
+                        fontWeight: FontWeight.w800,
+                        fontSize: 18,
+                        color: isDark ? Colors.white : const Color(0xFF1E293B))),
+                Text(item['label'] as String,
+                    style: const TextStyle(
+                        fontSize: 10,
+                        color: Color(0xFF94A3B8),
+                        fontWeight: FontWeight.w500),
+                    textAlign: TextAlign.center),
               ],
             ),
           ),
@@ -350,7 +499,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  Widget _buildLoyaltyCard() {
+  Widget _buildLoyaltyCard(bool isDark) {
     final level = _loyaltyPoints >= 200
         ? 'Altın'
         : _loyaltyPoints >= 100
@@ -361,7 +510,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
         : _loyaltyPoints >= 100
             ? const Color(0xFF64748B)
             : const Color(0xFFB45309);
-    final nextThreshold = _loyaltyPoints >= 200 ? 200 : _loyaltyPoints >= 100 ? 200 : 100;
+    final nextThreshold = _loyaltyPoints >= 200
+        ? 200
+        : _loyaltyPoints >= 100
+            ? 200
+            : 100;
     final progress = (_loyaltyPoints / nextThreshold).clamp(0.0, 1.0);
 
     return Container(
@@ -373,7 +526,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
           end: Alignment.bottomRight,
         ),
         borderRadius: BorderRadius.circular(16),
-        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 10, offset: const Offset(0, 2))],
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withValues(alpha: 0.05),
+              blurRadius: 10,
+              offset: const Offset(0, 2))
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -384,23 +542,41 @@ class _ProfileScreenState extends State<ProfileScreen> {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('Sadakat Puanları', style: TextStyle(fontSize: 12, color: Color(0xFF92400E), fontWeight: FontWeight.w500)),
+                  const Text('Sadakat Puanları',
+                      style: TextStyle(
+                          fontSize: 12,
+                          color: Color(0xFF92400E),
+                          fontWeight: FontWeight.w500)),
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
-                      Text('$_loyaltyPoints', style: const TextStyle(fontSize: 36, fontWeight: FontWeight.w900, color: Color(0xFFF97316))),
+                      Text('$_loyaltyPoints',
+                          style: const TextStyle(
+                              fontSize: 36,
+                              fontWeight: FontWeight.w900,
+                              color: Color(0xFFF97316))),
                       const Padding(
                         padding: EdgeInsets.only(bottom: 6, left: 4),
-                        child: Text('puan', style: TextStyle(fontSize: 13, color: Color(0xFF92400E), fontWeight: FontWeight.w600)),
+                        child: Text('puan',
+                            style: TextStyle(
+                                fontSize: 13,
+                                color: Color(0xFF92400E),
+                                fontWeight: FontWeight.w600)),
                       ),
                     ],
                   ),
                 ],
               ),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-                decoration: BoxDecoration(color: levelColor, borderRadius: BorderRadius.circular(20)),
-                child: Text(level, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 13)),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+                decoration: BoxDecoration(
+                    color: levelColor, borderRadius: BorderRadius.circular(20)),
+                child: Text(level,
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 13)),
               ),
             ],
           ),
@@ -410,7 +586,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
             child: LinearProgressIndicator(
               value: progress,
               backgroundColor: const Color(0xFFFDE68A),
-              valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFFF97316)),
+              valueColor:
+                  const AlwaysStoppedAnimation<Color>(Color(0xFFF97316)),
               minHeight: 8,
             ),
           ),
@@ -419,7 +596,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
             _loyaltyPoints >= nextThreshold
                 ? 'Maksimum seviyeye ulaştın! 🎉'
                 : '${nextThreshold - _loyaltyPoints} puan daha → $level${_loyaltyPoints >= 100 ? "" : " → Gümüş"} seviyesi',
-            style: const TextStyle(fontSize: 11, color: Color(0xFF92400E), fontWeight: FontWeight.w500),
+            style: const TextStyle(
+                fontSize: 11,
+                color: Color(0xFF92400E),
+                fontWeight: FontWeight.w500),
           ),
           const SizedBox(height: 12),
           const Text(
@@ -435,7 +615,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
     return OutlinedButton.icon(
       onPressed: _signOut,
       icon: const Icon(Icons.logout_rounded, color: Colors.red),
-      label: const Text('Çıkış Yap', style: TextStyle(color: Colors.red, fontWeight: FontWeight.w600)),
+      label: const Text('Çıkış Yap',
+          style: TextStyle(color: Colors.red, fontWeight: FontWeight.w600)),
       style: OutlinedButton.styleFrom(
         side: const BorderSide(color: Colors.red),
         padding: const EdgeInsets.symmetric(vertical: 14),

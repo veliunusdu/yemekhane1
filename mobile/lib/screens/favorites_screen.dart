@@ -2,9 +2,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import '../api_config.dart';
-import 'business_detail_screen.dart';
 
 class FavoritesScreen extends StatefulWidget {
   const FavoritesScreen({super.key});
@@ -25,11 +23,8 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
   }
 
   Future<void> _loadAndFetch() async {
-    userEmail = Supabase.instance.client.auth.currentSession?.user.email;
-    if (userEmail == null || userEmail!.isEmpty) {
-      final prefs = await SharedPreferences.getInstance();
-      userEmail = prefs.getString('user_email');
-    }
+    final prefs = await SharedPreferences.getInstance();
+    userEmail = prefs.getString('user_email');
     await _fetchFavorites();
   }
 
@@ -42,7 +37,6 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
     try {
       final res = await http.get(
         Uri.parse('$apiBaseUrl/api/v1/favorites?email=$userEmail'),
-        headers: await authHeaders(),
       );
       if (res.statusCode == 200) {
         setState(() {
@@ -60,13 +54,15 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
   Future<void> _removeFavorite(String businessName) async {
     // Optimistic remove
     final backup = List.from(favorites);
-    setState(() => favorites.removeWhere((f) => f['business_name'] == businessName));
+    setState(
+        () => favorites.removeWhere((f) => f['business_name'] == businessName));
 
     try {
       final res = await http.delete(
         Uri.parse('$apiBaseUrl/api/v1/favorites'),
-        headers: await authHeaders(),
-        body: json.encode({'user_email': userEmail, 'business_name': businessName}),
+        headers: {'Content-Type': 'application/json'},
+        body: json
+            .encode({'user_email': userEmail, 'business_name': businessName}),
       );
       if (res.statusCode != 200 && mounted) {
         setState(() => favorites = backup);
@@ -78,7 +74,8 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
           SnackBar(
             content: const Text('Favorilerden kaldırıldı'),
             behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             margin: const EdgeInsets.all(16),
           ),
         );
@@ -90,8 +87,11 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final theme = Theme.of(context);
+
     return Scaffold(
-      backgroundColor: const Color(0xFFF8FAFC),
+      backgroundColor: isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC),
       body: SafeArea(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -99,39 +99,27 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
             // ── Header ──
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 20, 20, 8),
-              child: Row(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'Favorilerim',
-                          style: TextStyle(
-                            fontSize: 24,
-                            fontWeight: FontWeight.bold,
-                            color: Color(0xFF0F172A),
-                            letterSpacing: -0.5,
-                          ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          favorites.isEmpty && !isLoading
-                              ? 'Henüz favori eklenmedi'
-                              : '${favorites.length} favori dükkan',
-                          style: const TextStyle(
-                            fontSize: 13,
-                            color: Color(0xFF94A3B8),
-                          ),
-                        ),
-                      ],
+                  Text(
+                    'Favorilerim',
+                    style: TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold,
+                      color: isDark ? Colors.white : const Color(0xFF0F172A),
+                      letterSpacing: -0.5,
                     ),
                   ),
-                  IconButton(
-                    onPressed: _fetchFavorites,
-                    icon: const Icon(Icons.refresh_rounded),
-                    color: const Color(0xFF64748B),
-                    tooltip: 'Yenile',
+                  const SizedBox(height: 2),
+                  Text(
+                    favorites.isEmpty && !isLoading
+                        ? 'Henüz favori eklenmedi'
+                        : '${favorites.length} favori dükkan',
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF94A3B8),
+                    ),
                   ),
                 ],
               ),
@@ -140,34 +128,26 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
             // ── Content ──
             Expanded(
               child: isLoading
-                  ? const Center(
-                      child: CircularProgressIndicator(
-                        color: Color(0xFFF97316),
-                        strokeWidth: 2,
-                      ),
-                    )
-                  : favorites.isEmpty
-                      ? _buildEmpty()
-                      : ListView.separated(
-                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-                          itemCount: favorites.length,
-                          separatorBuilder: (_, __) => const SizedBox(height: 8),
-                          itemBuilder: (context, index) {
-                            final fav = favorites[index];
-                            return _FavoriteCard(
-                              businessName: fav['business_name'] ?? 'Bilinmeyen',
-                              onRemove: () => _removeFavorite(fav['business_name']),
-                              onTap: () {
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (_) => BusinessDetailScreen(business: fav),
-                                  ),
+                  ? const Center(child: CircularProgressIndicator(color: Color(0xFFF97316), strokeWidth: 2))
+                  : RefreshIndicator(
+                      color: const Color(0xFFF97316),
+                      onRefresh: _fetchFavorites,
+                      child: favorites.isEmpty
+                          ? Stack(children: [ListView(), _buildEmpty(isDark)])
+                          : ListView.separated(
+                              padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+                              itemCount: favorites.length,
+                              separatorBuilder: (_, __) => const SizedBox(height: 8),
+                              itemBuilder: (context, index) {
+                                final fav = favorites[index];
+                                return _FavoriteCard(
+                                  businessName: fav['business_name'] ?? 'Bilinmeyen',
+                                  onRemove: () => _removeFavorite(fav['business_name']),
+                                  isDark: isDark,
                                 );
                               },
-                            );
-                          },
-                        ),
+                            ),
+                    ),
             ),
           ],
         ),
@@ -175,39 +155,14 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
     );
   }
 
-  Widget _buildEmpty() {
+  Widget _buildEmpty(bool isDark) {
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Container(
-            width: 72,
-            height: 72,
-            decoration: BoxDecoration(
-              color: const Color(0xFFFFF1F2),
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: const Icon(
-              Icons.favorite_border_rounded,
-              size: 36,
-              color: Color(0xFFF43F5E),
-            ),
-          ),
+          Icon(Icons.favorite_border, size: 48, color: isDark ? Colors.white24 : Colors.grey),
           const SizedBox(height: 16),
-          const Text(
-            'Favori dükkanın yok',
-            style: TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
-              color: Color(0xFF1E293B),
-            ),
-          ),
-          const SizedBox(height: 6),
-          const Text(
-            'Harita ekranından dükkanları\nfavorilerine ekleyebilirsin',
-            textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 13, color: Color(0xFF94A3B8), height: 1.4),
-          ),
+          Text('Favori dükkanın yok', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: isDark ? Colors.white70 : Colors.black87)),
         ],
       ),
     );
@@ -217,82 +172,66 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
 class _FavoriteCard extends StatelessWidget {
   final String businessName;
   final VoidCallback onRemove;
-  final VoidCallback onTap;
+  final bool isDark;
 
-  const _FavoriteCard({
-    required this.businessName,
-    required this.onRemove,
-    required this.onTap,
-  });
+  const _FavoriteCard(
+      {required this.businessName, required this.onRemove, required this.isDark});
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: const Color(0xFFF1F5F9)),
-          boxShadow: [
-            BoxShadow(
-              color: const Color(0xFF0F172A).withOpacity(0.04),
-              blurRadius: 12,
-              offset: const Offset(0, 2),
+    return Container(
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF1E293B) : Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+            color: isDark ? const Color(0xFF334155) : const Color(0xFFF1F5F9)),
+        boxShadow: isDark
+            ? []
+            : [
+                BoxShadow(
+                  color: const Color(0xFF0F172A).withOpacity(0.04),
+                  blurRadius: 12,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        child: Row(
+          children: [
+            // Avatar
+            Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                color: isDark ? const Color(0xFF334155) : const Color(0xFFFFF7ED),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Icon(Icons.storefront_rounded,
+                  color: Color(0xFFF97316), size: 24),
+            ),
+            const SizedBox(width: 14),
+            // Name
+            Expanded(
+              child: Text(
+                businessName,
+                style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: isDark ? Colors.white : const Color(0xFF1E293B)),
+              ),
+            ),
+            // Action
+            IconButton(
+              onPressed: onRemove,
+              icon: const Icon(Icons.favorite_rounded,
+                  color: Color(0xFFEF4444), size: 22),
+              tooltip: 'Favorilerden Kaldır',
             ),
           ],
-        ),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-          child: Row(
-            children: [
-              // Avatar
-              Container(
-                width: 44,
-                height: 44,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFFFF7ED),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: const Icon(
-                  Icons.store_rounded,
-                  color: Color(0xFFF97316),
-                  size: 22,
-                ),
-              ),
-              const SizedBox(width: 14),
-              // Name
-              Expanded(
-                child: Text(
-                  businessName,
-                  style: const TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
-                    color: Color(0xFF1E293B),
-                  ),
-                ),
-              ),
-              // Remove button
-              GestureDetector(
-                onTap: (onRemove),
-                child: Container(
-                  width: 36,
-                  height: 36,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFFFF1F2),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: const Icon(
-                    Icons.favorite_rounded,
-                    color: Color(0xFFF43F5E),
-                    size: 18,
-                  ),
-                ),
-              ),
-            ],
-          ),
         ),
       ),
     );
   }
 }
+

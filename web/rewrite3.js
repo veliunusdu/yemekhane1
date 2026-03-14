@@ -1,4 +1,5 @@
-"use client";
+const fs = require('fs');
+const onboardingCode = `"use client";
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
@@ -193,4 +194,6 @@ export default function OnboardingPage() {
       </div>
     </div>
   );
-}
+}`;
+fs.writeFileSync('app/onboarding/page.tsx', onboardingCode);
+console.log('Onboarding modified');

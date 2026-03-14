@@ -66,7 +66,81 @@ Future<void> main() async {
     await _setupFCM();
   }
 
-  runApp(const YemekhaneApp());
+  runApp(const ThemeProvider(child: YemekhaneApp()));
+}
+
+class ThemeProvider extends StatefulWidget {
+  final Widget child;
+  const ThemeProvider({super.key, required this.child});
+
+  static _ThemeProviderState of(BuildContext context) {
+    final inherited =
+        context.dependOnInheritedWidgetOfExactType<InheritedThemeProvider>();
+    if (inherited == null) {
+      throw Exception('ThemeProvider not found in context');
+    }
+    return inherited.state;
+  }
+
+  @override
+  State<ThemeProvider> createState() => _ThemeProviderState();
+}
+
+class _ThemeProviderState extends State<ThemeProvider> {
+  ThemeMode _themeMode = ThemeMode.light;
+
+  ThemeMode get themeMode => _themeMode;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadTheme();
+  }
+
+  Future<void> _loadTheme() async {
+    final prefs = await SharedPreferences.getInstance();
+    final themeStr = prefs.getString('theme_mode');
+    if (themeStr != null) {
+      setState(() {
+        _themeMode = ThemeMode.values.firstWhere(
+          (e) => e.toString() == themeStr,
+          orElse: () => ThemeMode.light,
+        );
+      });
+    }
+  }
+
+  Future<void> setThemeMode(ThemeMode mode) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('theme_mode', mode.toString());
+    setState(() {
+      _themeMode = mode;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) => InheritedThemeProvider(
+        state: this,
+        themeMode: _themeMode,
+        child: widget.child,
+      );
+}
+
+class InheritedThemeProvider extends InheritedWidget {
+  final _ThemeProviderState state;
+  final ThemeMode themeMode;
+
+  const InheritedThemeProvider({
+    super.key,
+    required this.state,
+    required this.themeMode,
+    required super.child,
+  });
+
+  @override
+  bool updateShouldNotify(InheritedThemeProvider oldWidget) {
+    return themeMode != oldWidget.themeMode;
+  }
 }
 
 /// Yerel bildirim plugin başlatma
@@ -154,13 +228,32 @@ class YemekhaneApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final themeProvider = ThemeProvider.of(context);
     return MaterialApp(
       title: 'Yemekhane',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.orange),
         useMaterial3: true,
+        scaffoldBackgroundColor: const Color(0xFFF8FAFC),
+        appBarTheme: const AppBarTheme(
+          backgroundColor: Colors.white,
+          surfaceTintColor: Colors.transparent,
+        ),
       ),
+      darkTheme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: Colors.orange,
+          brightness: Brightness.dark,
+        ),
+        useMaterial3: true,
+        scaffoldBackgroundColor: const Color(0xFF0F172A),
+        appBarTheme: const AppBarTheme(
+          backgroundColor: Color(0xFF1E293B),
+          surfaceTintColor: Colors.transparent,
+        ),
+      ),
+      themeMode: themeProvider.themeMode,
       home: const AuthGate(),
     );
   }
@@ -207,15 +300,14 @@ class _AuthGateState extends State<AuthGate> {
   @override
   Widget build(BuildContext context) {
     // Auth kontrol beklenirken loading göster
-    return const Scaffold(
-      backgroundColor: Colors.white,
+    return Scaffold(
       body: Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.fastfood, size: 64, color: Colors.orange),
-            SizedBox(height: 16),
-            CircularProgressIndicator(color: Colors.orange),
+            const Icon(Icons.fastfood, size: 64, color: Colors.orange),
+            const SizedBox(height: 16),
+            const CircularProgressIndicator(color: Colors.orange),
           ],
         ),
       ),
@@ -244,25 +336,57 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      extendBody: true,
       body: IndexedStack(index: _selectedIndex, children: _screens),
-      bottomNavigationBar: Container(
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          border: Border(top: BorderSide(color: Color(0xFFF1F5F9), width: 1)),
-        ),
-        child: SafeArea(
-          top: false,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            child: Row(
-              children: [
-                _NavItem(icon: Icons.fastfood_rounded,    label: 'Menü',        index: 0, selected: _selectedIndex, onTap: (i) => setState(() => _selectedIndex = i)),
-                _NavItem(icon: Icons.receipt_long_rounded,label: 'Siparişlerim',index: 1, selected: _selectedIndex, onTap: (i) => setState(() => _selectedIndex = i)),
-                _NavItem(icon: Icons.map_rounded,         label: 'Harita',      index: 2, selected: _selectedIndex, onTap: (i) => setState(() => _selectedIndex = i)),
-                _NavItem(icon: Icons.favorite_rounded,    label: 'Favoriler',   index: 3, selected: _selectedIndex, onTap: (i) => setState(() => _selectedIndex = i)),
-                _NavItem(icon: Icons.person_rounded,      label: 'Profil',      index: 4, selected: _selectedIndex, onTap: (i) => setState(() => _selectedIndex = i)),
-              ],
-            ),
+      bottomNavigationBar: SafeArea(
+        child: Container(
+          margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(30),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.08),
+                blurRadius: 20,
+                offset: const Offset(0, 10),
+              )
+            ],
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              _NavItem(
+                  icon: Icons.fastfood_rounded,
+                  label: 'Menü',
+                  index: 0,
+                  selected: _selectedIndex,
+                  onTap: (i) => setState(() => _selectedIndex = i)),
+              _NavItem(
+                  icon: Icons.receipt_long_rounded,
+                  label: 'Sipariş',
+                  index: 1,
+                  selected: _selectedIndex,
+                  onTap: (i) => setState(() => _selectedIndex = i)),
+              _NavItem(
+                  icon: Icons.map_rounded,
+                  label: 'Harita',
+                  index: 2,
+                  selected: _selectedIndex,
+                  onTap: (i) => setState(() => _selectedIndex = i)),
+              _NavItem(
+                  icon: Icons.favorite_rounded,
+                  label: 'Favoriler',
+                  index: 3,
+                  selected: _selectedIndex,
+                  onTap: (i) => setState(() => _selectedIndex = i)),
+              _NavItem(
+                  icon: Icons.person_rounded,
+                  label: 'Profil',
+                  index: 4,
+                  selected: _selectedIndex,
+                  onTap: (i) => setState(() => _selectedIndex = i)),
+            ],
           ),
         ),
       ),
@@ -288,32 +412,41 @@ class _NavItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isActive = index == selected;
-    return Expanded(
-      child: GestureDetector(
-        onTap: () => onTap(index),
-        behavior: HitTestBehavior.opaque,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 200),
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          decoration: BoxDecoration(
-            color: isActive ? const Color(0xFFFFF7ED) : Colors.transparent,
-            borderRadius: BorderRadius.circular(14),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(icon, size: 22, color: isActive ? const Color(0xFFF97316) : const Color(0xFF94A3B8)),
-              const SizedBox(height: 3),
+    return GestureDetector(
+      onTap: () => onTap(index),
+      behavior: HitTestBehavior.opaque,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeOutCubic,
+        padding:
+            EdgeInsets.symmetric(horizontal: isActive ? 16 : 10, vertical: 10),
+        decoration: BoxDecoration(
+          color: isActive
+              ? const Color(0xFFF97316).withOpacity(0.12)
+              : Colors.transparent,
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              icon,
+              size: 24,
+              color:
+                  isActive ? const Color(0xFFF97316) : const Color(0xFF94A3B8),
+            ),
+            if (isActive) ...[
+              const SizedBox(width: 8),
               Text(
                 label,
-                style: TextStyle(
-                  fontSize: 10,
-                  fontWeight: isActive ? FontWeight.w700 : FontWeight.w500,
-                  color: isActive ? const Color(0xFFF97316) : const Color(0xFF94A3B8),
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFFF97316),
                 ),
               ),
-            ],
-          ),
+            ]
+          ],
         ),
       ),
     );
@@ -337,7 +470,14 @@ class _PackagesScreenState extends State<PackagesScreen> {
   String _selectedCategory = '';
   Timer? _debounce;
 
-  static const _categories = ['Tümü', 'Yemek', 'Tatlı', 'İçecek', 'Vegan', 'Kahvaltı'];
+  static const _categories = [
+    'Tümü',
+    'Yemek',
+    'Tatlı',
+    'İçecek',
+    'Vegan',
+    'Kahvaltı'
+  ];
 
   @override
   void initState() {
@@ -361,7 +501,7 @@ class _PackagesScreenState extends State<PackagesScreen> {
   Future<void> fetchPackages() async {
     setState(() => isLoading = true);
     try {
-      final uri = Uri.parse('$apiBaseUrl/api/v1/packages').replace(
+      final uri = Uri.parse("$apiBaseUrl/api/v1/packages").replace(
         queryParameters: {
           if (_searchQ.isNotEmpty) 'q': _searchQ,
           if (_selectedCategory.isNotEmpty) 'category': _selectedCategory,
@@ -373,12 +513,15 @@ class _PackagesScreenState extends State<PackagesScreen> {
         final List<dynamic> list = (body is Map && body['data'] != null)
             ? body['data']
             : (body is List ? body : []);
-        setState(() { packages = list; isLoading = false; });
+        setState(() {
+          packages = list;
+          isLoading = false;
+        });
       } else {
         setState(() => isLoading = false);
       }
     } catch (e) {
-      debugPrint('Packages error: $e');
+      debugPrint("Packages error: $e");
       setState(() => isLoading = false);
     }
   }
@@ -398,176 +541,281 @@ class _PackagesScreenState extends State<PackagesScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Scaffold(
-      backgroundColor: const Color(0xFFF8FAFC),
-      body: SafeArea(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // ── Header ──
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 20, 8, 8),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text('Günün Fırsatları',
-                          style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Color(0xFF0F172A), letterSpacing: -0.5)),
-                        const SizedBox(height: 2),
-                        Text(
-                          isLoading ? 'Yükleniyor...' : '${packages.length} paket mevcut',
-                          style: const TextStyle(fontSize: 13, color: Color(0xFF94A3B8)),
-                        ),
-                      ],
-                    ),
-                  ),
-                  IconButton(
-                    onPressed: fetchPackages,
-                    icon: const Icon(Icons.refresh_rounded, color: Color(0xFF64748B)),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.store_rounded, color: Color(0xFF64748B)),
-                    tooltip: 'İşletme Ara',
-                    onPressed: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(builder: (_) => const BusinessSearchScreen()),
-                    ),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.logout_rounded, color: Color(0xFF94A3B8)),
-                    tooltip: 'Çıkış Yap',
-                    onPressed: () async {
-                      final prefs = await SharedPreferences.getInstance();
-                      await prefs.clear();
-                      await Supabase.instance.client.auth.signOut();
-                      if (!context.mounted) return;
-                      Navigator.pushAndRemoveUntil(context,
-                        MaterialPageRoute(builder: (_) => const LoginScreen()), (_) => false);
-                    },
-                  ),
-                ],
+      backgroundColor: isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC),
+      body: CustomScrollView(
+        slivers: [
+          // ── App Bar ──
+          SliverAppBar(
+            expandedHeight: 120.0,
+            floating: true,
+            pinned: true,
+            elevation: 0,
+            backgroundColor: isDark ? const Color(0xFF1E293B) : const Color(0xFFF8FAFC),
+            flexibleSpace: FlexibleSpaceBar(
+              titlePadding: const EdgeInsets.only(left: 20, bottom: 16),
+              title: Text(
+                'Günün Fırsatları',
+                style: TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.w800,
+                  color: isDark ? Colors.white : const Color(0xFF0F172A),
+                  letterSpacing: -0.5,
+                ),
               ),
-            ),
-
-            // ── Arama Çubuğu ──
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-              child: TextField(
-                controller: _searchCtrl,
-                onChanged: _onSearchChanged,
-                style: const TextStyle(fontSize: 14, color: Color(0xFF0F172A)),
-                decoration: InputDecoration(
-                  hintText: 'Paket ara...',
-                  hintStyle: const TextStyle(color: Color(0xFFCBD5E1), fontSize: 14),
-                  prefixIcon: const Icon(Icons.search_rounded, size: 20, color: Color(0xFF94A3B8)),
-                  suffixIcon: _searchQ.isNotEmpty
-                      ? IconButton(
-                          icon: const Icon(Icons.clear_rounded, size: 18, color: Color(0xFF94A3B8)),
-                          onPressed: () {
-                            _searchCtrl.clear();
-                            setState(() => _searchQ = '');
-                            fetchPackages();
-                          },
-                        )
-                      : null,
-                  filled: true,
-                  fillColor: Colors.white,
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: Color(0xFFE2E8F0))),
-                  enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: Color(0xFFE2E8F0))),
-                  focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: Color(0xFFF97316), width: 1.5)),
+              background: Container(
+                alignment: Alignment.bottomRight,
+                padding: const EdgeInsets.only(right: 20, bottom: 16),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      decoration: BoxDecoration(
+                          color: isDark ? const Color(0xFF334155) : Colors.white,
+                          shape: BoxShape.circle,
+                          boxShadow: [
+                            BoxShadow(
+                                color: Colors.black.withOpacity(0.05),
+                                blurRadius: 10,
+                                offset: const Offset(0, 4))
+                          ]),
+                      child: IconButton(
+                        icon: Icon(Icons.store_rounded,
+                            color: isDark ? Colors.white70 : const Color(0xFF64748B), size: 20),
+                        tooltip: 'İşletme Ara',
+                        onPressed: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                              builder: (_) => const BusinessSearchScreen()),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Container(
+                      decoration: BoxDecoration(
+                          color: isDark ? const Color(0xFF334155) : Colors.white,
+                          shape: BoxShape.circle,
+                          boxShadow: [
+                            BoxShadow(
+                                color: Colors.black.withOpacity(0.05),
+                                blurRadius: 10,
+                                offset: const Offset(0, 4))
+                          ]),
+                      child: IconButton(
+                        icon: const Icon(Icons.logout_rounded,
+                            color: Color(0xFFEF4444), size: 20),
+                        tooltip: 'Çıkış Yap',
+                        onPressed: () async {
+                          final prefs = await SharedPreferences.getInstance();
+                          await prefs.clear();
+                          await Supabase.instance.client.auth.signOut();
+                          if (!context.mounted) return;
+                          Navigator.pushAndRemoveUntil(
+                              context,
+                              MaterialPageRoute(
+                                  builder: (_) => const LoginScreen()),
+                              (_) => false);
+                        },
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
+          ),
 
-            // ── Kategori Chip'leri ──
-            SizedBox(
-              height: 38,
-              child: ListView.separated(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                scrollDirection: Axis.horizontal,
-                itemCount: _categories.length,
-                separatorBuilder: (_, __) => const SizedBox(width: 8),
-                itemBuilder: (context, i) {
-                  final cat = _categories[i];
-                  final isSelected = (cat == 'Tümü' && _selectedCategory.isEmpty) || cat == _selectedCategory;
-                  return GestureDetector(
-                    onTap: () => _selectCategory(cat),
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 200),
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                      decoration: BoxDecoration(
-                        color: isSelected ? const Color(0xFFF97316) : Colors.white,
+          // ── Search & Categories ──
+          SliverToBoxAdapter(
+            child: Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
+                  child: Container(
+                    decoration: BoxDecoration(
+                        color: isDark ? const Color(0xFF1E293B) : Colors.white,
                         borderRadius: BorderRadius.circular(20),
-                        border: Border.all(color: isSelected ? const Color(0xFFF97316) : const Color(0xFFE2E8F0)),
-                      ),
-                      child: Text(
-                        cat,
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: isSelected ? Colors.white : const Color(0xFF64748B),
+                        boxShadow: [
+                          BoxShadow(
+                              color: Colors.black.withOpacity(0.03),
+                              blurRadius: 15,
+                              offset: const Offset(0, 5))
+                        ]),
+                    child: TextField(
+                      controller: _searchCtrl,
+                      onChanged: _onSearchChanged,
+                      style: TextStyle(
+                          fontSize: 15,
+                          color: isDark ? Colors.white : const Color(0xFF0F172A),
+                          fontWeight: FontWeight.w500),
+                      decoration: InputDecoration(
+                        hintText: 'En lezzetli fırsatları ara...',
+                        hintStyle: TextStyle(
+                            color: isDark ? Colors.white38 : const Color(0xFF94A3B8),
+                            fontSize: 14,
+                            fontWeight: FontWeight.w400),
+                        prefixIcon: const Padding(
+                          padding: EdgeInsets.only(left: 16, right: 12),
+                          child: Icon(Icons.search_rounded,
+                              size: 22, color: Color(0xFFF97316)),
                         ),
+                        prefixIconConstraints:
+                            const BoxConstraints(minWidth: 40),
+                        suffixIcon: _searchQ.isNotEmpty
+                            ? IconButton(
+                                icon: Icon(Icons.clear_rounded,
+                                    size: 20, color: isDark ? Colors.white38 : const Color(0xFF94A3B8)),
+                                onPressed: () {
+                                  _searchCtrl.clear();
+                                  setState(() => _searchQ = '');
+                                  fetchPackages();
+                                },
+                              )
+                            : null,
+                        border: InputBorder.none,
+                        contentPadding:
+                            const EdgeInsets.symmetric(vertical: 16),
                       ),
                     ),
-                  );
-                },
-              ),
-            ),
-            const SizedBox(height: 8),
+                  ),
+                ),
 
-            // ── List ──
-            Expanded(
-              child: isLoading
-                  ? const Center(child: CircularProgressIndicator(color: Color(0xFFF97316), strokeWidth: 2))
-                  : packages.isEmpty
-                      ? _buildEmpty()
-                      : RefreshIndicator(
-                          color: const Color(0xFFF97316),
-                          onRefresh: fetchPackages,
-                          child: ListView.separated(
-                            padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
-                            itemCount: packages.length,
-                            separatorBuilder: (_, __) => const SizedBox(height: 10),
-                            itemBuilder: (context, i) => _PackageCard(
-                              pkg: packages[i],
-                              userEmail: userEmail,
-                              onSuccess: fetchPackages,
+                // ── Kategoriler ──
+                SizedBox(
+                  height: 44,
+                  child: ListView.separated(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    scrollDirection: Axis.horizontal,
+                    itemCount: _categories.length,
+                    separatorBuilder: (_, __) => const SizedBox(width: 12),
+                    itemBuilder: (context, i) {
+                      final cat = _categories[i];
+                      final isSelected =
+                          (cat == 'Tümü' && _selectedCategory.isEmpty) ||
+                              cat == _selectedCategory;
+                      return GestureDetector(
+                        onTap: () => _selectCategory(cat),
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 250),
+                          curve: Curves.easeInOutBack,
+                          padding: const EdgeInsets.symmetric(horizontal: 20),
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            color: isSelected
+                                ? const Color(0xFFF97316)
+                                : (isDark ? const Color(0xFF1E293B) : Colors.white),
+                            borderRadius: BorderRadius.circular(22),
+                            boxShadow: isSelected
+                                ? [
+                                    BoxShadow(
+                                        color: const Color(0xFFF97316)
+                                            .withOpacity(0.3),
+                                        blurRadius: 8,
+                                        offset: const Offset(0, 4))
+                                  ]
+                                : [
+                                    BoxShadow(
+                                        color: Colors.black.withOpacity(0.02),
+                                        blurRadius: 4,
+                                        offset: const Offset(0, 2))
+                                  ],
+                            border: Border.all(
+                                color: isSelected
+                                    ? Colors.transparent
+                                    : (isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0))),
+                          ),
+                          child: Text(
+                            cat,
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: isSelected
+                                  ? FontWeight.w700
+                                  : FontWeight.w500,
+                              color: isSelected
+                                  ? Colors.white
+                                  : (isDark ? Colors.white70 : const Color(0xFF64748B)),
                             ),
                           ),
                         ),
+                      );
+                    },
+                  ),
+                ),
+                const SizedBox(height: 20),
+              ],
             ),
-          ],
-        ),
+          ),
+
+          // ── Package List ──
+          if (isLoading)
+            const SliverFillRemaining(
+              child: Center(
+                  child: CircularProgressIndicator(
+                      color: Color(0xFFF97316), strokeWidth: 3)),
+            )
+          else if (packages.isEmpty)
+            SliverFillRemaining(
+              child: _buildEmpty(),
+            )
+          else
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 100),
+              sliver: SliverList(
+                delegate: SliverChildBuilderDelegate(
+                  (context, i) => Padding(
+                    padding: const EdgeInsets.only(bottom: 20),
+                    child: _PackageCard(
+                      pkg: packages[i],
+                      userEmail: userEmail,
+                      onSuccess: fetchPackages,
+                    ),
+                  ),
+                  childCount: packages.length,
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }
 
   Widget _buildEmpty() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Container(
-            width: 72, height: 72,
-            decoration: BoxDecoration(color: const Color(0xFFFFF7ED), borderRadius: BorderRadius.circular(20)),
-            child: const Icon(Icons.fastfood_rounded, size: 36, color: Color(0xFFF97316)),
+            width: 80,
+            height: 80,
+            decoration: BoxDecoration(
+                color: isDark ? const Color(0xFF1E293B) : const Color(0xFFFFF7ED),
+                borderRadius: BorderRadius.circular(24),
+                boxShadow: [
+                  BoxShadow(
+                      color: const Color(0xFFF97316).withOpacity(0.1),
+                      blurRadius: 20,
+                      offset: const Offset(0, 10))
+                ]),
+            child: const Icon(Icons.search_off_rounded,
+                size: 40, color: Color(0xFFF97316)),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 24),
           Text(
             _searchQ.isNotEmpty || _selectedCategory.isNotEmpty
-                ? 'Arama sonucu bulunamadı'
-                : 'Aktif paket bulunamadı',
-            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: Color(0xFF1E293B)),
+                ? 'Sonuç bulunamadı'
+                : 'Şu an fırsat yok',
+            style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: isDark ? Colors.white : const Color(0xFF1E293B)),
           ),
-          const SizedBox(height: 6),
+          const SizedBox(height: 8),
           Text(
             _searchQ.isNotEmpty || _selectedCategory.isNotEmpty
-                ? 'Farklı bir arama veya kategori deneyin'
-                : 'Yeni fırsatlar yakında eklenecek',
-            style: const TextStyle(fontSize: 13, color: Color(0xFF94A3B8)),
+                ? 'Farklı bir arama yapmayı deneyin.'
+                : 'Yeni fırsatlar eklendiğinde burada olacak.',
+            style: TextStyle(fontSize: 14, color: isDark ? Colors.white70 : const Color(0xFF64748B)),
           ),
         ],
       ),
@@ -575,13 +823,13 @@ class _PackagesScreenState extends State<PackagesScreen> {
   }
 }
 
-// ── Package Card ──────────────────────────────────────────
 class _PackageCard extends StatefulWidget {
   final dynamic pkg;
   final String? userEmail;
   final VoidCallback onSuccess;
 
-  const _PackageCard({required this.pkg, required this.userEmail, required this.onSuccess});
+  const _PackageCard(
+      {required this.pkg, required this.userEmail, required this.onSuccess});
 
   @override
   State<_PackageCard> createState() => _PackageCardState();
@@ -595,7 +843,7 @@ class _PackageCardState extends State<_PackageCard> {
     setState(() => isBuying = true);
     try {
       final res = await http.post(
-        Uri.parse('$apiBaseUrl/api/v1/orders'),
+        Uri.parse("$apiBaseUrl/api/v1/orders"),
         headers: await authHeaders(),
         body: json.encode({
           'package_id': widget.pkg['id'],
@@ -605,26 +853,42 @@ class _PackageCardState extends State<_PackageCard> {
       if (!mounted) return;
       if (res.statusCode == 201) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: const Text('Siparişiniz alındı! Ödemeyi teslimatta yapabilirsiniz. 🎉'),
+          content: const Row(
+            children: [
+              Icon(Icons.check_circle_rounded, color: Colors.white),
+              SizedBox(width: 8),
+              Expanded(
+                  child: Text(
+                      'Siparişiniz alındı! Ödemeyi teslimatta yapabilirsiniz. 🎉')),
+            ],
+          ),
           backgroundColor: const Color(0xFF10B981),
           behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          margin: const EdgeInsets.all(16),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          margin: const EdgeInsets.all(20),
+          duration: const Duration(seconds: 4),
         ));
         widget.onSuccess();
       } else {
-        String errMsg = 'Sipariş oluşturulamadı (${res.statusCode})';
-        try { final d = json.decode(res.body); errMsg = d['error'] ?? errMsg; } catch (_) {}
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(errMsg)));
+        String errMsg = "Sipariş oluşturulamadı (${res.statusCode})";
+        try {
+          final d = json.decode(res.body);
+          errMsg = d['error'] ?? errMsg;
+        } catch (_) {}
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(errMsg), backgroundColor: const Color(0xFFEF4444)));
       }
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Bağlantı hatası: $e')));
+      if (mounted)
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text("Bağlantı hatası: $e"),
+            backgroundColor: const Color(0xFFEF4444)));
     } finally {
       if (mounted) setState(() => isBuying = false);
     }
   }
 
-  // Kalan süreyi hesaplar. Örn: "19:30:00" → "1 sa 15 dk kaldı"
   String? _remainingTime() {
     final untilStr = widget.pkg['available_until']?.toString() ?? '';
     if (untilStr.isEmpty) return null;
@@ -635,10 +899,10 @@ class _PackageCardState extends State<_PackageCard> {
         int.tryParse(parts[0]) ?? 0, int.tryParse(parts[1]) ?? 0);
     final diff = until.difference(now);
     if (diff.isNegative || diff.inMinutes == 0) return null;
-    if (diff.inMinutes < 60) return '⏰ ${diff.inMinutes} dk kaldı';
+    if (diff.inMinutes < 60) return "${diff.inMinutes} dk";
     final h = diff.inHours;
     final m = diff.inMinutes % 60;
-    return '⏰ $h sa${m > 0 ? ' $m dk' : ''} kaldı';
+    return "$h sa${m > 0 ? " $m dk" : ""}";
   }
 
   @override
@@ -646,10 +910,15 @@ class _PackageCardState extends State<_PackageCard> {
     final pkg = widget.pkg;
     final hasImage = pkg['image_url'] != null && pkg['image_url'] != '';
     final category = pkg['category']?.toString() ?? '';
-    final tags = (pkg['tags'] as List?)?.map((e) => e.toString()).toList() ?? [];
-    final discount = pkg['original_price'] != null && pkg['discounted_price'] != null
-        ? (((pkg['original_price'] - pkg['discounted_price']) / pkg['original_price']) * 100).round()
-        : 0;
+    final tags =
+        (pkg['tags'] as List?)?.map((e) => e.toString()).toList() ?? [];
+    final discount =
+        pkg['original_price'] != null && pkg['discounted_price'] != null
+            ? (((pkg['original_price'] - pkg['discounted_price']) /
+                        pkg['original_price']) *
+                    100)
+                .round()
+            : 0;
     final remaining = _remainingTime();
     final isUrgent = () {
       final untilStr = pkg['available_until']?.toString() ?? '';
@@ -664,130 +933,356 @@ class _PackageCardState extends State<_PackageCard> {
 
     return Container(
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: const Color(0xFFF1F5F9)),
-        boxShadow: [BoxShadow(color: const Color(0xFF0F172A).withOpacity(0.04), blurRadius: 12, offset: const Offset(0, 2))],
+        color: Theme.of(context).brightness == Brightness.dark
+            ? const Color(0xFF1E293B)
+            : Colors.white,
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: [
+          BoxShadow(
+              color: Theme.of(context).brightness == Brightness.dark
+                  ? Colors.black26
+                  : const Color(0xFF0F172A).withOpacity(0.06),
+              blurRadius: 24,
+              offset: const Offset(0, 8))
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Image or placeholder
+          // ── Image Section ──
           Stack(
             children: [
               ClipRRect(
-                borderRadius: const BorderRadius.vertical(top: Radius.circular(18)),
+                borderRadius:
+                    const BorderRadius.vertical(top: Radius.circular(24)),
                 child: hasImage
-                    ? Image.network(pkg['image_url'], height: 140, width: double.infinity, fit: BoxFit.cover,
-                        errorBuilder: (_, __, ___) => _imagePlaceholder())
+                    ? Image.network(
+                        pkg['image_url'],
+                        height: 180,
+                        width: double.infinity,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) => _imagePlaceholder(),
+                      )
                     : _imagePlaceholder(),
               ),
-              // Discount badge
-              if (discount > 0)
-                Positioned(
-                  top: 10, left: 10,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                    decoration: BoxDecoration(color: const Color(0xFFEF4444), borderRadius: BorderRadius.circular(20)),
-                    child: Text('-%$discount', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white)),
+              // Gradient Overlay for readability of badges
+              Positioned.fill(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    borderRadius:
+                        const BorderRadius.vertical(top: Radius.circular(24)),
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        Colors.black.withOpacity(0.3),
+                        Colors.transparent,
+                        Colors.black.withOpacity(0.1),
+                      ],
+                      stops: const [0.0, 0.4, 1.0],
+                    ),
                   ),
                 ),
-              // Stock badge
+              ),
+              // Badges Top Left
+              if (discount > 0)
+                Positioned(
+                  top: 16,
+                  left: 16,
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFEF4444),
+                      borderRadius: BorderRadius.circular(20),
+                      boxShadow: [
+                        BoxShadow(
+                            color: const Color(0xFFEF4444).withOpacity(0.4),
+                            blurRadius: 8,
+                            offset: const Offset(0, 2))
+                      ],
+                    ),
+                    child: Text('-%$discount',
+                        style: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w900,
+                            color: Colors.white,
+                            letterSpacing: 0.5)),
+                  ),
+                ),
+              // Badges Top Right
               Positioned(
-                top: 10, right: 10,
+                top: 16,
+                right: 16,
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                  decoration: BoxDecoration(color: Colors.white.withOpacity(0.92), borderRadius: BorderRadius.circular(20)),
-                  child: Text('${pkg['stock']} adet', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF3B82F6))),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).brightness == Brightness.dark
+                        ? const Color(0xFF334155).withOpacity(0.95)
+                        : Colors.white.withOpacity(0.95),
+                    borderRadius: BorderRadius.circular(20),
+                    boxShadow: [
+                      BoxShadow(
+                          color: Colors.black.withOpacity(0.1),
+                          blurRadius: 8,
+                          offset: const Offset(0, 2))
+                    ],
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.inventory_2_rounded,
+                          size: 14, color: Color(0xFF3B82F6)),
+                      const SizedBox(width: 4),
+                      Text('${pkg['stock']} limit',
+                          style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w800,
+                              color: Theme.of(context).brightness ==
+                                      Brightness.dark
+                                  ? Colors.white
+                                  : const Color(0xFF1E293B))),
+                    ],
+                  ),
                 ),
               ),
-              // Countdown badge
+              // Badges Bottom
               if (remaining != null)
                 Positioned(
-                  bottom: 8, left: 10,
+                  bottom: 12,
+                  left: 16,
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                     decoration: BoxDecoration(
-                      color: isUrgent ? const Color(0xFFEF4444) : const Color(0xFFF59E0B),
-                      borderRadius: BorderRadius.circular(20),
+                      color: isUrgent
+                          ? const Color(0xFFEF4444)
+                          : Colors.black.withOpacity(0.6),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: Colors.white.withOpacity(0.2)),
+                      boxShadow: [
+                        BoxShadow(
+                            color: Colors.black.withOpacity(0.2),
+                            blurRadius: 4,
+                            offset: const Offset(0, 2))
+                      ],
                     ),
-                    child: Text(remaining, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white)),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.timer_rounded,
+                            size: 14, color: Colors.white),
+                        const SizedBox(width: 4),
+                        Text(remaining,
+                            style: const TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                                color: Colors.white)),
+                      ],
+                    ),
                   ),
                 ),
             ],
           ),
 
+          // ── Content Section ──
           Padding(
-            padding: const EdgeInsets.all(14),
+            padding: const EdgeInsets.all(20),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Name + Category
-                if (category.isNotEmpty)
-                  Text(category, style: const TextStyle(fontSize: 11, color: Color(0xFFF97316), fontWeight: FontWeight.w600)),
-                const SizedBox(height: 2),
-                Text(pkg['name'] ?? '', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF0F172A))),
-                const SizedBox(height: 4),
-                Text(pkg['description'] ?? '', style: const TextStyle(fontSize: 12, color: Color(0xFF94A3B8), height: 1.3), maxLines: 2, overflow: TextOverflow.ellipsis),
-
-                // Rating
-                if ((pkg['rating'] as num?)?.toDouble() != null && (pkg['rating'] as num).toDouble() > 0) ...[
-                  const SizedBox(height: 4),
-                  Row(
-                    children: [
-                      const Icon(Icons.star_rounded, color: Color(0xFFFBBF24), size: 14),
-                      const SizedBox(width: 3),
-                      Text(
-                        (pkg['rating'] as num).toDouble().toStringAsFixed(1),
-                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF78716C)),
+                // Category & Rating
+                Row(
+                  children: [
+                    if (category.isNotEmpty)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF97316).withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          category.toUpperCase(),
+                          style: const TextStyle(
+                              fontSize: 11,
+                              color: Color(0xFFF97316),
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 0.5),
+                        ),
                       ),
-                    ],
-                  ),
-                ],
+                    const Spacer(),
+                    if ((pkg['rating'] as num?)?.toDouble() != null &&
+                        (pkg['rating'] as num).toDouble() > 0)
+                      Row(
+                        children: [
+                          const Icon(Icons.star_rounded,
+                              color: Color(0xFFFBBF24), size: 16),
+                          const SizedBox(width: 4),
+                          Text(
+                            (pkg['rating'] as num)
+                                .toDouble()
+                                .toStringAsFixed(1),
+                            style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w700,
+                                color: Theme.of(context).brightness ==
+                                        Brightness.dark
+                                    ? Colors.white70
+                                    : const Color(0xFF475569)),
+                          ),
+                        ],
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+
+                // Title
+                Text(
+                  pkg['name'] ?? '',
+                  style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
+                      color: Theme.of(context).brightness == Brightness.dark
+                          ? Colors.white
+                          : const Color(0xFF0F172A),
+                      height: 1.3),
+                ),
+                const SizedBox(height: 6),
+
+                // Description
+                Text(
+                  pkg['description'] ?? '',
+                  style: TextStyle(
+                      fontSize: 14,
+                      color: Theme.of(context).brightness == Brightness.dark
+                          ? Colors.white60
+                          : const Color(0xFF64748B),
+                      height: 1.5),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
 
                 // Tags
                 if (tags.isNotEmpty) ...[
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 14),
                   Wrap(
-                    spacing: 4, runSpacing: 4,
-                    children: tags.map((t) => Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                      decoration: BoxDecoration(color: const Color(0xFFFFF1F2), borderRadius: BorderRadius.circular(6)),
-                      child: Text(t, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: Color(0xFFE11D48))),
-                    )).toList(),
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: tags
+                        .map((t) => Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 10, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: Theme.of(context).brightness ==
+                                        Brightness.dark
+                                    ? const Color(0xFF334155)
+                                    : const Color(0xFFF1F5F9),
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: Text(t,
+                                  style: TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w600,
+                                      color: Theme.of(context).brightness ==
+                                              Brightness.dark
+                                          ? Colors.white70
+                                          : const Color(0xFF475569))),
+                            ))
+                        .toList(),
                   ),
                 ],
 
-                const SizedBox(height: 12),
-                // Price + Button
+                const SizedBox(height: 20),
+                Divider(
+                    height: 1,
+                    color: Theme.of(context).brightness == Brightness.dark
+                        ? const Color(0xFF334155)
+                        : const Color(0xFFF1F5F9)),
+                const SizedBox(height: 16),
+
+                // Footer (Price & Action)
                 Row(
-                  crossAxisAlignment: CrossAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text('₺${pkg['original_price']}',
-                          style: const TextStyle(decoration: TextDecoration.lineThrough, color: Color(0xFF94A3B8), fontSize: 12)),
-                        Text('₺${pkg['discounted_price']}',
-                          style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Color(0xFF16A34A))),
+                        if (discount > 0)
+                          Text('₺${pkg['original_price']}',
+                              style: TextStyle(
+                                  decoration: TextDecoration.lineThrough,
+                                  color: Theme.of(context).brightness ==
+                                          Brightness.dark
+                                      ? Colors.white38
+                                      : const Color(0xFF94A3B8),
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w500)),
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text('₺',
+                                style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w700,
+                                    color: Color(0xFF16A34A),
+                                    height: 1.2)),
+                            const SizedBox(width: 2),
+                            Text('${pkg['discounted_price']}',
+                                style: const TextStyle(
+                                    fontSize: 26,
+                                    fontWeight: FontWeight.w900,
+                                    color: Color(0xFF16A34A),
+                                    height: 1)),
+                          ],
+                        ),
                       ],
                     ),
                     const Spacer(),
-                    SizedBox(
-                      width: 110,
+                    Container(
+                      width: 140,
+                      decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(16),
+                          gradient: const LinearGradient(
+                              colors: [Color(0xFF22C55E), Color(0xFF16A34A)]),
+                          boxShadow: [
+                            BoxShadow(
+                                color: const Color(0xFF22C55E).withOpacity(0.3),
+                                blurRadius: 12,
+                                offset: const Offset(0, 4))
+                          ]),
                       child: ElevatedButton(
                         onPressed: isBuying ? null : _buy,
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF16A34A),
+                          backgroundColor: Colors.transparent,
+                          shadowColor: Colors.transparent,
                           foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(16)),
                           elevation: 0,
-                          disabledBackgroundColor: const Color(0xFFD1FAE5),
+                          disabledBackgroundColor:
+                              const Color(0xFFD1FAE5).withOpacity(0.5),
                         ),
                         child: isBuying
-                            ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                            : const Text('Hemen Al', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                            ? const SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                    color: Colors.white, strokeWidth: 2.5))
+                            : const Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(Icons.shopping_bag_rounded, size: 18),
+                                  SizedBox(width: 6),
+                                  Text('Hemen Al',
+                                      style: TextStyle(
+                                          fontWeight: FontWeight.w800,
+                                          fontSize: 14,
+                                          letterSpacing: 0.3)),
+                                ],
+                              ),
                       ),
                     ),
                   ],
@@ -801,10 +1296,31 @@ class _PackageCardState extends State<_PackageCard> {
   }
 
   Widget _imagePlaceholder() {
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
     return Container(
-      height: 140, width: double.infinity,
-      color: const Color(0xFFFFF7ED),
-      child: const Center(child: Icon(Icons.fastfood_rounded, color: Color(0xFFF97316), size: 48)),
+      height: 180,
+      width: double.infinity,
+      color: isDark ? const Color(0xFF1E293B) : const Color(0xFFFFF7ED),
+      child: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                  color: isDark ? const Color(0xFF334155) : Colors.white,
+                  shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(
+                        color: const Color(0xFFF97316).withOpacity(0.1),
+                        blurRadius: 10)
+                  ]),
+              child: const Icon(Icons.restaurant_rounded,
+                  color: Color(0xFFF97316), size: 36),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

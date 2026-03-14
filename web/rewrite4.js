@@ -1,4 +1,6 @@
-"use client";
+const fs = require('fs');
+
+const scannerCode = `"use client";
 
 import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
@@ -77,7 +79,7 @@ export default function QRScanner() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Authorization": `Bearer ${token}`
+          "Authorization": \`Bearer \${token}\`
         },
         body: JSON.stringify({ order_id: decodedText }),
       });
@@ -137,7 +139,7 @@ export default function QRScanner() {
       {/* Floating Status Indicator Overlay */}
       {statusMessage && (
         <div className="absolute inset-0 z-50 flex items-center justify-center p-6 bg-black/70 backdrop-blur-sm animate-in fade-in duration-200">
-          <div className={`flex flex-col items-center justify-center w-full max-w-sm p-10 rounded-[2.5rem] shadow-2xl animate-in zoom-in-95 duration-200 text-center ${isError ? "bg-red-600/90 box-shadow-[0_0_100px_rgba(220,38,38,0.4)]" : statusMessage === "İşleniyor..." ? "bg-white/10" : "bg-green-600/90 box-shadow-[0_0_100px_rgba(22,163,74,0.4)]"}`}>
+          <div className={\`flex flex-col items-center justify-center w-full max-w-sm p-10 rounded-[2.5rem] shadow-2xl animate-in zoom-in-95 duration-200 text-center \${isError ? "bg-red-600/90 box-shadow-[0_0_100px_rgba(220,38,38,0.4)]" : statusMessage === "İşleniyor..." ? "bg-white/10" : "bg-green-600/90 box-shadow-[0_0_100px_rgba(22,163,74,0.4)]"}\`}>
             {isError ? (
               <XCircle className="w-24 h-24 text-white mb-6 animate-in zoom-in" />
             ) : statusMessage === "İşleniyor..." ? (
@@ -163,4 +165,6 @@ export default function QRScanner() {
       )}
     </div>
   );
-}
+}`;
+fs.writeFileSync('app/scanner/page.tsx', scannerCode);
+console.log('Scanner modified');

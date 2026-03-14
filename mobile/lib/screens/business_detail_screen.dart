@@ -5,10 +5,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../api_config.dart';
 
-const _ink    = Color(0xFF0F172A);
-const _muted  = Color(0xFF94A3B8);
+const _ink = Color(0xFF0F172A);
+const _muted = Color(0xFF94A3B8);
 const _orange = Color(0xFFF97316);
-const _bg     = Color(0xFFF8FAFC);
+const _bg = Color(0xFFF8FAFC);
 
 class BusinessDetailScreen extends StatefulWidget {
   final Map<String, dynamic> business;
@@ -41,7 +41,9 @@ class _BusinessDetailScreenState extends State<BusinessDetailScreen> {
 
   Future<void> _init() async {
     // 'id' (search sonucu) veya 'business_id' (favoriler) her ikisini de destekle
-    _bizId = ((widget.business['id'] ?? widget.business['business_id']) as String? ?? '');
+    _bizId =
+        ((widget.business['id'] ?? widget.business['business_id']) as String? ??
+            '');
 
     _userEmail = Supabase.instance.client.auth.currentSession?.user.email;
     if (_userEmail == null || _userEmail!.isEmpty) {
@@ -53,9 +55,13 @@ class _BusinessDetailScreenState extends State<BusinessDetailScreen> {
 
   Future<void> _fetchReviews() async {
     final bizId = _bizId;
-    if (bizId.isEmpty) { setState(() => _isLoadingReviews = false); return; }
+    if (bizId.isEmpty) {
+      setState(() => _isLoadingReviews = false);
+      return;
+    }
     try {
-      final res = await http.get(Uri.parse('$apiBaseUrl/api/v1/businesses/$bizId/reviews'));
+      final res = await http
+          .get(Uri.parse('$apiBaseUrl/api/v1/businesses/$bizId/reviews'));
       if (res.statusCode == 200 && mounted) {
         final data = json.decode(res.body);
         final reviewList = data['reviews'] as List? ?? [];
@@ -86,7 +92,10 @@ class _BusinessDetailScreenState extends State<BusinessDetailScreen> {
         final List<dynamic> list = (body is Map && body['data'] != null)
             ? body['data']
             : (body is List ? body : []);
-        setState(() { _packages = list; _isLoadingPkgs = false; });
+        setState(() {
+          _packages = list;
+          _isLoadingPkgs = false;
+        });
       } else {
         setState(() => _isLoadingPkgs = false);
       }
@@ -96,10 +105,14 @@ class _BusinessDetailScreenState extends State<BusinessDetailScreen> {
   }
 
   Future<void> _checkFavorite() async {
-    if (_userEmail == null) { setState(() => _isLoadingFav = false); return; }
+    if (_userEmail == null) {
+      setState(() => _isLoadingFav = false);
+      return;
+    }
     final bizId = _bizId;
     try {
-      final res = await http.get(Uri.parse('$apiBaseUrl/api/v1/favorites?email=$_userEmail'));
+      final res = await http
+          .get(Uri.parse('$apiBaseUrl/api/v1/favorites?email=$_userEmail'));
       if (res.statusCode == 200 && mounted) {
         final favs = json.decode(res.body) as List;
         setState(() {
@@ -109,7 +122,9 @@ class _BusinessDetailScreenState extends State<BusinessDetailScreen> {
       } else {
         setState(() => _isLoadingFav = false);
       }
-    } catch (_) { setState(() => _isLoadingFav = false); }
+    } catch (_) {
+      setState(() => _isLoadingFav = false);
+    }
   }
 
   Future<void> _toggleFavorite() async {
@@ -135,141 +150,110 @@ class _BusinessDetailScreenState extends State<BusinessDetailScreen> {
       } else if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(_isFavorite ? 'Favorilere eklendi ❤️' : 'Favorilerden kaldırıldı'),
+            content: Text(_isFavorite
+                ? 'Favorilere eklendi ❤️'
+                : 'Favorilerden kaldırıldı'),
             behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             margin: const EdgeInsets.all(16),
           ),
         );
       }
-    } catch (_) { if (mounted) setState(() => _isFavorite = prev); }
+    } catch (_) {
+      if (mounted) setState(() => _isFavorite = prev);
+    }
   }
 
-  void _showReviewSheet() {
-    int rating = 5;
-    final ctrl = TextEditingController();
-    final bizId = _bizId;
+  int _inlineRating = 5;
+  final TextEditingController _reviewCtrl = TextEditingController();
+  bool _isSubmittingReview = false;
 
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) => StatefulBuilder(
-        builder: (context, setSheet) => Padding(
-          padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
-          child: Container(
-            decoration: const BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-            ),
-            padding: const EdgeInsets.fromLTRB(24, 16, 24, 32),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Center(child: Container(width: 40, height: 4, decoration: BoxDecoration(color: const Color(0xFFE2E8F0), borderRadius: BorderRadius.circular(2)))),
-                const SizedBox(height: 20),
-                const Text('İşletmeyi Değerlendir', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: _ink)),
-                const SizedBox(height: 4),
-                const Text('Deneyiminizi paylaşın', style: TextStyle(fontSize: 13, color: _muted)),
-                const SizedBox(height: 20),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: List.generate(5, (i) => GestureDetector(
-                    onTap: () => setSheet(() => rating = i + 1),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 6),
-                      child: Icon(
-                        i < rating ? Icons.star_rounded : Icons.star_outline_rounded,
-                        color: const Color(0xFFFBBF24),
-                        size: 38,
-                      ),
-                    ),
-                  )),
+  Future<void> _submitReview() async {
+    if (_userEmail == null || _bizId.isEmpty) return;
+    setState(() => _isSubmittingReview = true);
+    final comment = _reviewCtrl.text;
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final res = await http.post(
+        Uri.parse('$apiBaseUrl/api/v1/reviews'),
+        headers: await authHeaders(),
+        body: json.encode({
+          'business_id': _bizId,
+          'user_email': _userEmail,
+          'order_id': '',
+          'rating': _inlineRating,
+          'comment': comment,
+        }),
+      );
+      if (!mounted) return;
+      if (res.statusCode == 201) {
+        await _fetchReviews();
+        messenger.showSnackBar(const SnackBar(content: Text('Yorumunuz alındı 🎉')));
+      } else if (res.statusCode == 409) {
+        messenger.showSnackBar(const SnackBar(content: Text('Bu işletmeyi zaten değerlendirdiniz')));
+      }
+    } catch (_) {} finally {
+      if (mounted) setState(() => _isSubmittingReview = false);
+    }
+  }
+
+  Widget _buildInlineReviewForm() {
+    if (_hasReviewed) return const SizedBox.shrink();
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFF1F5F9)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('İşletmeyi Değerlendir', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: _ink)),
+          const SizedBox(height: 12),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: List.generate(5, (i) => GestureDetector(
+              onTap: () => setState(() => _inlineRating = i + 1),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                child: Icon(
+                  i < _inlineRating ? Icons.star_rounded : Icons.star_outline_rounded,
+                  color: const Color(0xFFFBBF24),
+                  size: 32,
                 ),
-                const SizedBox(height: 20),
-                TextField(
-                  controller: ctrl,
-                  maxLines: 3,
-                  style: const TextStyle(fontSize: 14, color: _ink),
-                  decoration: InputDecoration(
-                    hintText: 'Yorumunuz (isteğe bağlı)',
-                    hintStyle: const TextStyle(color: _muted, fontSize: 13),
-                    filled: true,
-                    fillColor: const Color(0xFFF8FAFC),
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: Color(0xFFE2E8F0))),
-                    enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: Color(0xFFE2E8F0))),
-                    focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: _orange, width: 1.5)),
-                    contentPadding: const EdgeInsets.all(14),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                Row(children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: () => Navigator.pop(ctx),
-                      style: OutlinedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                        side: const BorderSide(color: Color(0xFFE2E8F0)),
-                      ),
-                      child: const Text('İptal', style: TextStyle(color: _muted)),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: ElevatedButton(
-                      onPressed: () async {
-                        Navigator.pop(ctx);
-                        final comment = ctrl.text;
-                        final messenger = ScaffoldMessenger.of(context);
-                        try {
-                          final res = await http.post(
-                            Uri.parse('$apiBaseUrl/api/v1/reviews'),
-                            headers: await authHeaders(),
-                            body: json.encode({
-                              'business_id': bizId,
-                              'user_email': _userEmail ?? '',
-                              'order_id': '',
-                              'rating': rating,
-                              'comment': comment,
-                            }),
-                          );
-                          if (!mounted) return;
-                          if (res.statusCode == 201) {
-                            await _fetchReviews();
-                            messenger.showSnackBar(SnackBar(
-                              content: const Text('Yorumunuz alındı 🎉'),
-                              backgroundColor: const Color(0xFF10B981),
-                              behavior: SnackBarBehavior.floating,
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                              margin: const EdgeInsets.all(16),
-                            ));
-                          } else if (res.statusCode == 409) {
-                            messenger.showSnackBar(SnackBar(
-                              content: const Text('Bu işletmeyi zaten değerlendirdiniz'),
-                              behavior: SnackBarBehavior.floating,
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                              margin: const EdgeInsets.all(16),
-                            ));
-                          }
-                        } catch (_) {}
-                      },
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: _orange,
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                        elevation: 0,
-                      ),
-                      child: const Text('Gönder', style: TextStyle(fontWeight: FontWeight.w600)),
-                    ),
-                  ),
-                ]),
-              ],
+              ),
+            )),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _reviewCtrl,
+            maxLines: 2,
+            decoration: InputDecoration(
+              hintText: 'Yorumunuz (isteğe bağlı)',
+              filled: true,
+              fillColor: const Color(0xFFF8FAFC),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
             ),
           ),
-        ),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed: _isSubmittingReview ? null : _submitReview,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: _orange,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              child: _isSubmittingReview
+                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                  : const Text('Gönder'),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -289,15 +273,23 @@ class _BusinessDetailScreenState extends State<BusinessDetailScreen> {
       if (res.statusCode == 201) {
         await _fetchPackages();
         messenger.showSnackBar(
-          const SnackBar(content: Text('Siparişiniz alındı! Ödemeyi teslimatta yapabilirsiniz. 🎉'), backgroundColor: Colors.green, behavior: SnackBarBehavior.floating),
+          const SnackBar(
+              content: Text(
+                  'Siparişiniz alındı! Ödemeyi teslimatta yapabilirsiniz. 🎉'),
+              backgroundColor: Colors.green,
+              behavior: SnackBarBehavior.floating),
         );
       } else {
         String errMsg = 'Sipariş oluşturulamadı (${res.statusCode})';
-        try { final d = json.decode(res.body); errMsg = d['error'] ?? errMsg; } catch (_) {}
+        try {
+          final d = json.decode(res.body);
+          errMsg = d['error'] ?? errMsg;
+        } catch (_) {}
         messenger.showSnackBar(SnackBar(content: Text(errMsg)));
       }
     } catch (e) {
-      if (mounted) messenger.showSnackBar(SnackBar(content: Text('Bağlantı hatası: $e')));
+      if (mounted)
+        messenger.showSnackBar(SnackBar(content: Text('Bağlantı hatası: $e')));
     }
   }
 
@@ -323,9 +315,15 @@ class _BusinessDetailScreenState extends State<BusinessDetailScreen> {
                 color: const Color(0xFFFFF7ED),
                 child: Center(
                   child: logoUrl.isNotEmpty
-                      ? Image.network(logoUrl, fit: BoxFit.cover, width: double.infinity,
-                          errorBuilder: (_, __, ___) => const Icon(Icons.store_rounded, color: _orange, size: 64))
-                      : const Icon(Icons.store_rounded, color: _orange, size: 64),
+                      ? Image.network(logoUrl,
+                          fit: BoxFit.cover,
+                          width: double.infinity,
+                          errorBuilder: (_, __, ___) => const Icon(
+                              Icons.store_rounded,
+                              color: _orange,
+                              size: 64))
+                      : const Icon(Icons.store_rounded,
+                          color: _orange, size: 64),
                 ),
               ),
             ),
@@ -335,15 +333,23 @@ class _BusinessDetailScreenState extends State<BusinessDetailScreen> {
                 child: _isLoadingFav
                     ? const Padding(
                         padding: EdgeInsets.all(12),
-                        child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: _orange)),
+                        child: SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2, color: _orange)),
                       )
                     : IconButton(
                         icon: Icon(
-                          _isFavorite ? Icons.favorite_rounded : Icons.favorite_border_rounded,
+                          _isFavorite
+                              ? Icons.favorite_rounded
+                              : Icons.favorite_border_rounded,
                           color: _isFavorite ? const Color(0xFFF43F5E) : _muted,
                         ),
                         onPressed: _toggleFavorite,
-                        tooltip: _isFavorite ? 'Favorilerden çıkar' : 'Favorilere ekle',
+                        tooltip: _isFavorite
+                            ? 'Favorilerden çıkar'
+                            : 'Favorilere ekle',
                       ),
               ),
             ],
@@ -357,22 +363,38 @@ class _BusinessDetailScreenState extends State<BusinessDetailScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(name, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: _ink, letterSpacing: -0.5)),
+                  Text(name,
+                      style: const TextStyle(
+                          fontSize: 22,
+                          fontWeight: FontWeight.bold,
+                          color: _ink,
+                          letterSpacing: -0.5)),
                   if (category.isNotEmpty) ...[
                     const SizedBox(height: 4),
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                      decoration: BoxDecoration(color: const Color(0xFFFFF7ED), borderRadius: BorderRadius.circular(20)),
-                      child: Text(category, style: const TextStyle(fontSize: 12, color: _orange, fontWeight: FontWeight.w600)),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(
+                          color: const Color(0xFFFFF7ED),
+                          borderRadius: BorderRadius.circular(20)),
+                      child: Text(category,
+                          style: const TextStyle(
+                              fontSize: 12,
+                              color: _orange,
+                              fontWeight: FontWeight.w600)),
                     ),
                   ],
                   if (address.isNotEmpty) ...[
                     const SizedBox(height: 8),
                     Row(
                       children: [
-                        const Icon(Icons.location_on_rounded, size: 14, color: _muted),
+                        const Icon(Icons.location_on_rounded,
+                            size: 14, color: _muted),
                         const SizedBox(width: 4),
-                        Expanded(child: Text(address, style: const TextStyle(fontSize: 13, color: _muted))),
+                        Expanded(
+                            child: Text(address,
+                                style: const TextStyle(
+                                    fontSize: 13, color: _muted))),
                       ],
                     ),
                   ],
@@ -389,7 +411,8 @@ class _BusinessDetailScreenState extends State<BusinessDetailScreen> {
               padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
               child: Text(
                 'Mevcut Paketler',
-                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: _ink),
+                style: const TextStyle(
+                    fontSize: 16, fontWeight: FontWeight.bold, color: _ink),
               ),
             ),
           ),
@@ -397,7 +420,9 @@ class _BusinessDetailScreenState extends State<BusinessDetailScreen> {
           // ── Packages List ──
           if (_isLoadingPkgs)
             const SliverFillRemaining(
-              child: Center(child: CircularProgressIndicator(color: _orange, strokeWidth: 2)),
+              child: Center(
+                  child: CircularProgressIndicator(
+                      color: _orange, strokeWidth: 2)),
             )
           else if (_packages.isEmpty)
             SliverFillRemaining(
@@ -405,11 +430,17 @@ class _BusinessDetailScreenState extends State<BusinessDetailScreen> {
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: const [
-                    Icon(Icons.lunch_dining_rounded, size: 48, color: Color(0xFFCBD5E1)),
+                    Icon(Icons.lunch_dining_rounded,
+                        size: 48, color: Color(0xFFCBD5E1)),
                     SizedBox(height: 12),
-                    Text('Şu an aktif paket yok', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Color(0xFF475569))),
+                    Text('Şu an aktif paket yok',
+                        style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF475569))),
                     SizedBox(height: 4),
-                    Text('Daha sonra tekrar kontrol edin', style: TextStyle(fontSize: 13, color: _muted)),
+                    Text('Daha sonra tekrar kontrol edin',
+                        style: TextStyle(fontSize: 13, color: _muted)),
                   ],
                 ),
               ),
@@ -437,66 +468,58 @@ class _BusinessDetailScreenState extends State<BusinessDetailScreen> {
               padding: const EdgeInsets.fromLTRB(20, 8, 20, 8),
               child: Row(
                 children: [
-                  const Text('Yorumlar', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: _ink)),
+                  const Text('Yorumlar',
+                      style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: _ink)),
                   if (!_isLoadingReviews && _reviewCount > 0) ...[
                     const SizedBox(width: 8),
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                      decoration: BoxDecoration(color: const Color(0xFFFFF7ED), borderRadius: BorderRadius.circular(20)),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                          color: const Color(0xFFFFF7ED),
+                          borderRadius: BorderRadius.circular(20)),
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          const Icon(Icons.star_rounded, color: Color(0xFFFBBF24), size: 14),
+                          const Icon(Icons.star_rounded,
+                              color: Color(0xFFFBBF24), size: 14),
                           const SizedBox(width: 3),
                           Text(
                             '${_avgRating.toStringAsFixed(1)}  ($_reviewCount)',
-                            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _orange),
+                            style: const TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: _orange),
                           ),
                         ],
                       ),
                     ),
                   ],
-                  const Spacer(),
-                  if (!_isLoadingReviews)
-                    OutlinedButton.icon(
-                      onPressed: _hasReviewed ? null : _showReviewSheet,
-                      icon: Icon(
-                        _hasReviewed ? Icons.check_circle_rounded : Icons.star_outline_rounded,
-                        size: 14,
-                      ),
-                      label: Text(
-                        _hasReviewed ? 'Değerlendirildi ✓' : 'Yorum Yap',
-                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-                      ),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: _hasReviewed ? const Color(0xFF10B981) : _orange,
-                        disabledForegroundColor: const Color(0xFF10B981),
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                        minimumSize: Size.zero,
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-                        side: BorderSide(
-                          color: _hasReviewed ? const Color(0xFFD1FAE5) : const Color(0xFFFFEDD5),
-                        ),
-                      ),
-                    ),
                 ],
               ),
             ),
           ),
 
+          if (!_isLoadingReviews) SliverToBoxAdapter(child: _buildInlineReviewForm()),
+
           if (_isLoadingReviews)
             const SliverToBoxAdapter(
               child: Padding(
                 padding: EdgeInsets.symmetric(vertical: 16),
-                child: Center(child: CircularProgressIndicator(color: _orange, strokeWidth: 2)),
+                child: Center(
+                    child: CircularProgressIndicator(
+                        color: _orange, strokeWidth: 2)),
               ),
             )
           else if (_reviews.isEmpty)
             const SliverToBoxAdapter(
               child: Padding(
                 padding: EdgeInsets.fromLTRB(20, 0, 20, 32),
-                child: Text('Henüz yorum yok.', style: TextStyle(fontSize: 13, color: _muted)),
+                child: Text('Henüz yorum yok.',
+                    style: TextStyle(fontSize: 13, color: _muted)),
               ),
             )
           else
@@ -543,7 +566,9 @@ class _ReviewCard extends StatelessWidget {
           CircleAvatar(
             radius: 18,
             backgroundColor: const Color(0xFFFFF7ED),
-            child: Text(avatar, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: _orange)),
+            child: Text(avatar,
+                style: const TextStyle(
+                    fontSize: 14, fontWeight: FontWeight.bold, color: _orange)),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -554,22 +579,33 @@ class _ReviewCard extends StatelessWidget {
                   children: [
                     Expanded(
                       child: Text(
-                        email.length > 20 ? '${email.substring(0, 20)}…' : email,
-                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _ink),
+                        email.length > 20
+                            ? '${email.substring(0, 20)}…'
+                            : email,
+                        style: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: _ink),
                       ),
                     ),
                     Row(
-                      children: List.generate(5, (i) => Icon(
-                        i < rating ? Icons.star_rounded : Icons.star_outline_rounded,
-                        color: const Color(0xFFFBBF24),
-                        size: 13,
-                      )),
+                      children: List.generate(
+                          5,
+                          (i) => Icon(
+                                i < rating
+                                    ? Icons.star_rounded
+                                    : Icons.star_outline_rounded,
+                                color: const Color(0xFFFBBF24),
+                                size: 13,
+                              )),
                     ),
                   ],
                 ),
                 if (comment.isNotEmpty) ...[
                   const SizedBox(height: 4),
-                  Text(comment, style: const TextStyle(fontSize: 13, color: _muted, height: 1.4)),
+                  Text(comment,
+                      style: const TextStyle(
+                          fontSize: 13, color: _muted, height: 1.4)),
                 ],
               ],
             ),
@@ -596,14 +632,21 @@ class _PackageCard extends StatelessWidget {
     final stock = (pkg['stock'] as num?)?.toInt() ?? 0;
     final imageUrl = pkg['image_url'] as String? ?? '';
     final category = pkg['category'] as String? ?? '';
-    final discount = originalPrice > 0 ? (((originalPrice - discountedPrice) / originalPrice) * 100).round() : 0;
+    final discount = originalPrice > 0
+        ? (((originalPrice - discountedPrice) / originalPrice) * 100).round()
+        : 0;
 
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: const Color(0xFFF1F5F9)),
-        boxShadow: [BoxShadow(color: const Color(0xFF0F172A).withValues(alpha: 0.04), blurRadius: 12, offset: const Offset(0, 2))],
+        boxShadow: [
+          BoxShadow(
+              color: const Color(0xFF0F172A).withValues(alpha: 0.04),
+              blurRadius: 12,
+              offset: const Offset(0, 2))
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -612,29 +655,60 @@ class _PackageCard extends StatelessWidget {
           Stack(
             children: [
               ClipRRect(
-                borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+                borderRadius:
+                    const BorderRadius.vertical(top: Radius.circular(16)),
                 child: imageUrl.isNotEmpty
-                    ? Image.network(imageUrl, height: 140, width: double.infinity, fit: BoxFit.cover,
-                        errorBuilder: (_, __, ___) => Container(height: 100, color: const Color(0xFFFFF7ED), child: const Center(child: Icon(Icons.lunch_dining_rounded, color: _orange, size: 40))))
-                    : Container(height: 100, color: const Color(0xFFFFF7ED), child: const Center(child: Icon(Icons.lunch_dining_rounded, color: _orange, size: 40))),
+                    ? Image.network(imageUrl,
+                        height: 140,
+                        width: double.infinity,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) => Container(
+                            height: 100,
+                            color: const Color(0xFFFFF7ED),
+                            child: const Center(
+                                child: Icon(Icons.lunch_dining_rounded,
+                                    color: _orange, size: 40))))
+                    : Container(
+                        height: 100,
+                        color: const Color(0xFFFFF7ED),
+                        child: const Center(
+                            child: Icon(Icons.lunch_dining_rounded,
+                                color: _orange, size: 40))),
               ),
               if (discount > 0)
                 Positioned(
                   top: 10,
                   left: 10,
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    decoration: BoxDecoration(color: _orange, borderRadius: BorderRadius.circular(8)),
-                    child: Text('%$discount', style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                        color: _orange, borderRadius: BorderRadius.circular(8)),
+                    child: Text('%$discount',
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold)),
                   ),
                 ),
               Positioned(
                 top: 10,
                 right: 10,
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(color: stock > 0 ? const Color(0xFFDCFCE7) : const Color(0xFFFFEDED), borderRadius: BorderRadius.circular(8)),
-                  child: Text('Stok: $stock', style: TextStyle(color: stock > 0 ? const Color(0xFF16A34A) : const Color(0xFFDC2626), fontSize: 11, fontWeight: FontWeight.w600)),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                      color: stock > 0
+                          ? const Color(0xFFDCFCE7)
+                          : const Color(0xFFFFEDED),
+                      borderRadius: BorderRadius.circular(8)),
+                  child: Text('Stok: $stock',
+                      style: TextStyle(
+                          color: stock > 0
+                              ? const Color(0xFF16A34A)
+                              : const Color(0xFFDC2626),
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600)),
                 ),
               ),
             ],
@@ -645,12 +719,24 @@ class _PackageCard extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 if (category.isNotEmpty)
-                  Text(category, style: const TextStyle(fontSize: 11, color: _orange, fontWeight: FontWeight.w600)),
+                  Text(category,
+                      style: const TextStyle(
+                          fontSize: 11,
+                          color: _orange,
+                          fontWeight: FontWeight.w600)),
                 const SizedBox(height: 2),
-                Text(name, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: _ink)),
+                Text(name,
+                    style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.bold,
+                        color: _ink)),
                 if (description.isNotEmpty) ...[
                   const SizedBox(height: 4),
-                  Text(description, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, color: _muted, height: 1.4)),
+                  Text(description,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          fontSize: 12, color: _muted, height: 1.4)),
                 ],
                 const SizedBox(height: 10),
                 Row(
@@ -661,9 +747,15 @@ class _PackageCard extends StatelessWidget {
                       children: [
                         if (originalPrice > discountedPrice)
                           Text('₺${originalPrice.toStringAsFixed(2)}',
-                            style: const TextStyle(fontSize: 12, color: _muted, decoration: TextDecoration.lineThrough)),
+                              style: const TextStyle(
+                                  fontSize: 12,
+                                  color: _muted,
+                                  decoration: TextDecoration.lineThrough)),
                         Text('₺${discountedPrice.toStringAsFixed(2)}',
-                          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: _orange)),
+                            style: const TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                                color: _orange)),
                       ],
                     ),
                     const Spacer(),
@@ -671,7 +763,8 @@ class _PackageCard extends StatelessWidget {
                     GestureDetector(
                       onTap: stock > 0 ? onBuy : null,
                       child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 18, vertical: 10),
                         decoration: BoxDecoration(
                           color: stock > 0 ? _orange : const Color(0xFFE2E8F0),
                           borderRadius: BorderRadius.circular(12),

@@ -32,14 +32,20 @@ class _BusinessSearchScreenState extends State<BusinessSearchScreen> {
   }
 
   Future<void> _search(String query) async {
-    setState(() { _isLoading = true; _searched = true; });
+    setState(() {
+      _isLoading = true;
+      _searched = true;
+    });
     try {
       final uri = Uri.parse('$apiBaseUrl/api/v1/businesses/search').replace(
         queryParameters: {'q': query},
       );
       final res = await http.get(uri);
       if (res.statusCode == 200 && mounted) {
-        setState(() { _results = json.decode(res.body); _isLoading = false; });
+        setState(() {
+          _results = json.decode(res.body);
+          _isLoading = false;
+        });
       } else {
         setState(() => _isLoading = false);
       }
@@ -50,52 +56,60 @@ class _BusinessSearchScreenState extends State<BusinessSearchScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Scaffold(
-      backgroundColor: const Color(0xFFF8FAFC),
+      backgroundColor: isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC),
       appBar: AppBar(
-        backgroundColor: Colors.white,
+        backgroundColor: isDark ? const Color(0xFF1E293B) : Colors.white,
         elevation: 0,
-        title: const Text(
+        title: Text(
           'İşletme Ara',
           style: TextStyle(
             fontSize: 18,
             fontWeight: FontWeight.bold,
-            color: Color(0xFF0F172A),
+            color: isDark ? Colors.white : const Color(0xFF0F172A),
           ),
         ),
-        iconTheme: const IconThemeData(color: Color(0xFF0F172A)),
+        iconTheme: IconThemeData(color: isDark ? Colors.white : const Color(0xFF0F172A)),
       ),
       body: Column(
         children: [
           // Search bar
           Container(
-            color: Colors.white,
+            color: isDark ? const Color(0xFF1E293B) : Colors.white,
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
             child: Container(
               decoration: BoxDecoration(
-                color: const Color(0xFFF1F5F9),
+                color: isDark ? const Color(0xFF334155) : const Color(0xFFF1F5F9),
                 borderRadius: BorderRadius.circular(14),
               ),
               child: TextField(
                 controller: _searchController,
                 onChanged: _onSearchChanged,
                 autofocus: true,
-                style: const TextStyle(fontSize: 15, color: Color(0xFF0F172A)),
+                style: TextStyle(fontSize: 15, color: isDark ? Colors.white : const Color(0xFF0F172A)),
                 decoration: InputDecoration(
                   hintText: 'İşletme adı ile ara...',
-                  hintStyle: const TextStyle(color: Color(0xFF94A3B8), fontSize: 15),
-                  prefixIcon: const Icon(Icons.search_rounded, color: Color(0xFF94A3B8), size: 20),
+                  hintStyle:
+                      TextStyle(color: isDark ? Colors.white70 : const Color(0xFF94A3B8), fontSize: 15),
+                  prefixIcon: Icon(Icons.search_rounded,
+                      color: isDark ? Colors.white70 : const Color(0xFF94A3B8), size: 20),
                   suffixIcon: _searchController.text.isNotEmpty
                       ? IconButton(
-                          icon: const Icon(Icons.clear_rounded, color: Color(0xFF94A3B8), size: 18),
+                          icon: Icon(Icons.clear_rounded,
+                              color: isDark ? Colors.white70 : const Color(0xFF94A3B8), size: 18),
                           onPressed: () {
                             _searchController.clear();
-                            setState(() { _results = []; _searched = false; });
+                            setState(() {
+                              _results = [];
+                              _searched = false;
+                            });
                           },
                         )
                       : null,
                   border: InputBorder.none,
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 14),
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 4, vertical: 14),
                 ),
               ),
             ),
@@ -104,7 +118,9 @@ class _BusinessSearchScreenState extends State<BusinessSearchScreen> {
           // Results
           Expanded(
             child: _isLoading
-                ? const Center(child: CircularProgressIndicator(color: Color(0xFFF97316), strokeWidth: 2))
+                ? const Center(
+                    child: CircularProgressIndicator(
+                        color: Color(0xFFF97316), strokeWidth: 2))
                 : !_searched
                     ? _buildHint()
                     : _results.isEmpty
@@ -112,7 +128,8 @@ class _BusinessSearchScreenState extends State<BusinessSearchScreen> {
                         : ListView.separated(
                             padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
                             itemCount: _results.length,
-                            separatorBuilder: (_, __) => const SizedBox(height: 8),
+                            separatorBuilder: (_, __) =>
+                                const SizedBox(height: 8),
                             itemBuilder: (context, i) {
                               final biz = _results[i];
                               return _BusinessCard(
@@ -120,7 +137,8 @@ class _BusinessSearchScreenState extends State<BusinessSearchScreen> {
                                 onTap: () => Navigator.push(
                                   context,
                                   MaterialPageRoute(
-                                    builder: (_) => BusinessDetailScreen(business: biz),
+                                    builder: (_) =>
+                                        BusinessDetailScreen(business: biz),
                                   ),
                                 ),
                               );
@@ -137,18 +155,9 @@ class _BusinessSearchScreenState extends State<BusinessSearchScreen> {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(Icons.store_rounded, size: 48, color: Color(0xFFCBD5E1)),
-          SizedBox(height: 12),
-          Text(
-            'İşletme ara',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: Color(0xFF475569)),
-          ),
-          SizedBox(height: 4),
-          Text(
-            'Yukarıdaki arama kutusuna\nişletme adı yaz',
-            textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 13, color: Color(0xFF94A3B8), height: 1.4),
-          ),
+          Icon(Icons.store, size: 48, color: Colors.grey),
+          SizedBox(height: 16),
+          Text('İşletme ara', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
         ],
       ),
     );
@@ -159,17 +168,9 @@ class _BusinessSearchScreenState extends State<BusinessSearchScreen> {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(Icons.search_off_rounded, size: 48, color: Color(0xFFCBD5E1)),
-          SizedBox(height: 12),
-          Text(
-            'Sonuç bulunamadı',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: Color(0xFF475569)),
-          ),
-          SizedBox(height: 4),
-          Text(
-            'Farklı bir arama terimi deneyin',
-            style: TextStyle(fontSize: 13, color: Color(0xFF94A3B8)),
-          ),
+          Icon(Icons.search_off, size: 48, color: Colors.grey),
+          SizedBox(height: 16),
+          Text('Sonuç bulunamadı', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
         ],
       ),
     );
@@ -184,6 +185,7 @@ class _BusinessCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final name = biz['name'] as String? ?? '';
     final address = biz['address'] as String? ?? '';
     final category = biz['category'] as String? ?? '';
@@ -193,12 +195,12 @@ class _BusinessCard extends StatelessWidget {
       onTap: onTap,
       child: Container(
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: isDark ? const Color(0xFF1E293B) : Colors.white,
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: const Color(0xFFF1F5F9)),
+          border: Border.all(color: isDark ? const Color(0xFF334155) : const Color(0xFFF1F5F9)),
           boxShadow: [
             BoxShadow(
-              color: const Color(0xFF0F172A).withOpacity(0.04),
+              color: isDark ? Colors.black26 : const Color(0xFF0F172A).withOpacity(0.04),
               blurRadius: 12,
               offset: const Offset(0, 2),
             ),
@@ -213,14 +215,19 @@ class _BusinessCard extends StatelessWidget {
                 width: 48,
                 height: 48,
                 decoration: BoxDecoration(
-                  color: const Color(0xFFFFF7ED),
+                  color: isDark ? const Color(0xFF334155) : const Color(0xFFFFF7ED),
                   borderRadius: BorderRadius.circular(12),
                 ),
                 clipBehavior: Clip.antiAlias,
                 child: logoUrl.isNotEmpty
-                    ? Image.network(logoUrl, fit: BoxFit.cover,
-                        errorBuilder: (_, __, ___) => const Icon(Icons.store_rounded, color: Color(0xFFF97316), size: 24))
-                    : const Icon(Icons.store_rounded, color: Color(0xFFF97316), size: 24),
+                    ? Image.network(logoUrl,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) => Icon(
+                            Icons.store_rounded,
+                            color: isDark ? const Color(0xFFF97316) : const Color(0xFFF97316),
+                            size: 24))
+                    : Icon(Icons.store_rounded,
+                        color: isDark ? const Color(0xFFF97316) : const Color(0xFFF97316), size: 24),
               ),
               const SizedBox(width: 14),
               // Info
@@ -230,11 +237,18 @@ class _BusinessCard extends StatelessWidget {
                   children: [
                     Text(
                       name,
-                      style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Color(0xFF1E293B)),
+                      style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
+                          color: isDark ? Colors.white : const Color(0xFF1E293B)),
                     ),
                     if (category.isNotEmpty) ...[
                       const SizedBox(height: 2),
-                      Text(category, style: const TextStyle(fontSize: 12, color: Color(0xFFF97316), fontWeight: FontWeight.w500)),
+                      Text(category,
+                          style: const TextStyle(
+                              fontSize: 12,
+                              color: Color(0xFFF97316),
+                              fontWeight: FontWeight.w500)),
                     ],
                     if (address.isNotEmpty) ...[
                       const SizedBox(height: 2),
@@ -242,13 +256,15 @@ class _BusinessCard extends StatelessWidget {
                         address,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontSize: 12, color: Color(0xFF94A3B8)),
+                        style: const TextStyle(
+                            fontSize: 12, color: Color(0xFF94A3B8)),
                       ),
                     ],
                   ],
                 ),
               ),
-              const Icon(Icons.chevron_right_rounded, color: Color(0xFFCBD5E1), size: 20),
+              const Icon(Icons.chevron_right_rounded,
+                  color: Color(0xFFCBD5E1), size: 20),
             ],
           ),
         ),

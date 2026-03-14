@@ -18,7 +18,11 @@ class _PaymentPageState extends State<PaymentPage> {
 
   // Extracts the Iyzico payment token from the callback redirect URL
   String _extractToken(String url) {
-    try { return Uri.parse(url).queryParameters['token'] ?? ''; } catch (_) { return ''; }
+    try {
+      return Uri.parse(url).queryParameters['token'] ?? '';
+    } catch (_) {
+      return '';
+    }
   }
 
   bool _popped = false;
@@ -32,7 +36,7 @@ class _PaymentPageState extends State<PaymentPage> {
   @override
   void initState() {
     super.initState();
-    
+
     // Web platformunda WebView başlatılmaz, çökmesini engelleriz
     if (!kIsWeb) {
       _controller = WebViewController()
@@ -48,14 +52,16 @@ class _PaymentPageState extends State<PaymentPage> {
           NavigationDelegate(
             onNavigationRequest: (NavigationRequest request) {
               String url = request.url;
-              if (url.contains('iyzico-callback') || url.contains('yemekhane_callback')) {
+              if (url.contains('iyzico-callback') ||
+                  url.contains('yemekhane_callback')) {
                 _popWithToken(url);
                 return NavigationDecision.prevent;
               }
               return NavigationDecision.navigate;
             },
             onPageStarted: (String url) {
-              if (url.contains('iyzico-callback') || url.contains('yemekhane_callback')) {
+              if (url.contains('iyzico-callback') ||
+                  url.contains('yemekhane_callback')) {
                 _popWithToken(url);
                 return;
               }
@@ -63,7 +69,8 @@ class _PaymentPageState extends State<PaymentPage> {
             },
             onPageFinished: (_) => setState(() => _isLoading = false),
             onWebResourceError: (WebResourceError error) {
-              if (error.url?.contains('iyzico-callback') == true || error.url?.contains('yemekhane_callback') == true) {
+              if (error.url?.contains('iyzico-callback') == true ||
+                  error.url?.contains('yemekhane_callback') == true) {
                 _popWithToken(error.url ?? '');
                 return;
               }
@@ -105,10 +112,12 @@ class _PaymentPageState extends State<PaymentPage> {
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.orange,
                   foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
                 ),
                 icon: const Icon(Icons.open_in_new),
-                label: const Text('Ödeme Sayfasını Aç', style: TextStyle(fontSize: 16)),
+                label: const Text('Ödeme Sayfasını Aç',
+                    style: TextStyle(fontSize: 16)),
                 onPressed: () async {
                   final uri = Uri.parse(widget.paymentUrl);
                   if (await canLaunchUrl(uri)) {

@@ -3,20 +3,14 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import Image from "next/image";
+import { Eye, EyeOff, Loader2, ArrowRight } from "lucide-react";
 import { supabase } from "../../lib/supabaseClient";
-
-const ERROR_MESSAGES: Record<string, string> = {
-  invalid_credentials: "E-posta veya şifre hatalı. Lütfen kontrol edip tekrar deneyin.",
-  email_not_confirmed: "E-posta adresiniz henüz doğrulanmamış. Lütfen gelen kutunuzu kontrol edin.",
-  over_email_send_rate_limit: "Çok fazla deneme yaptınız. Lütfen biraz bekleyip tekrar deneyin.",
-  user_not_found: "Bu e-posta adresiyle kayıtlı bir hesap bulunamadı.",
-};
 
 export default function LoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -30,73 +24,91 @@ export default function LoginPage() {
     e.preventDefault();
     setError("");
     setLoading(true);
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+
+    const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
     setLoading(false);
-    if (error) {
-      const code = (error as { code?: string }).code ?? "";
-      setError(ERROR_MESSAGES[code] ?? error.message);
+
+    if (signInError) {
+      setError("Giriş başarısız. Lütfen bilgilerinizi kontrol edip tekrar deneyin.");
     } else {
       router.push("/");
     }
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50">
-      <form
-        onSubmit={handleLogin}
-        className="bg-white rounded-2xl border border-gray-100 p-8 w-full max-w-sm space-y-4 shadow-sm"
-      >
-        <div className="text-center mb-2">
-          <div className="w-20 h-20 mx-auto mb-3 rounded-xl overflow-hidden shadow-md">
-            <Image
-              src="/yemekhane-logo.png"
-              alt="Yemekhane Logo"
-              width={80}
-              height={80}
-              priority
-              className="w-full h-full object-cover"
-            />
+    <div className="flex min-h-screen items-center justify-center bg-white p-4">
+      <div className="w-full max-w-[360px] space-y-8">
+        <div className="space-y-2">
+          <div className="h-8 w-8 bg-black rounded-lg mb-6 shadow-sm flex items-center justify-center">
+            <span className="text-white text-xs font-bold font-mono">YH</span>
           </div>
-          <h1 className="text-xl font-semibold text-gray-900">İşletme Girişi</h1>
-          <p className="text-xs text-gray-400 mt-1">İşletme yönetim paneline giriş yapın</p>
+          <h1 className="text-2xl font-semibold tracking-tight text-black">Log in</h1>
+          <p className="text-sm text-gray-500">Sign in to your business dashboard.</p>
         </div>
-        {error && (
-          <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</p>
-        )}
-        <div>
-          <label className="block text-sm text-gray-600 mb-1">E-posta</label>
-          <input
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-            className="w-full bg-white border border-gray-300 rounded-xl px-4 py-3 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-transparent"
-          />
-        </div>
-        <div>
-          <label className="block text-sm text-gray-600 mb-1">Şifre</label>
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-            className="w-full bg-white border border-gray-300 rounded-xl px-4 py-3 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-transparent"
-          />
-        </div>
-        <button
-          type="submit"
-          disabled={loading}
-          className="w-full bg-orange-500 text-white rounded-xl py-3 text-sm font-medium hover:bg-orange-600 disabled:opacity-50"
-        >
-          {loading ? "Giriş yapılıyor..." : "Giriş Yap"}
-        </button>
-        <p className="text-center text-sm text-gray-500">
-          Hesabınız yok mu?{" "}
-          <Link href="/signup" className="text-orange-500 font-medium hover:underline">
-            Kayıt Ol
+
+        <form onSubmit={handleLogin} className="space-y-5">
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <label htmlFor="email" className="text-sm font-medium text-gray-700">Email address</label>
+              <input
+                id="email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+                className="w-full rounded-md border border-gray-200 bg-transparent px-3 py-2 text-sm text-black placeholder-gray-400 focus:border-black focus:outline-none focus:ring-1 focus:ring-black transition-colors"
+                placeholder="name@company.com"
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <label htmlFor="password" className="text-sm font-medium text-gray-700">Password</label>
+              </div>
+              <div className="relative">
+                <input
+                  id="password"
+                  type={showPassword ? "text" : "password"}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                  className="w-full rounded-md border border-gray-200 bg-transparent px-3 py-2 text-sm text-black placeholder-gray-400 focus:border-black focus:outline-none focus:ring-1 focus:ring-black transition-colors pr-10"
+                  placeholder="Enter your password"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-gray-400 hover:text-black transition-colors"
+                >
+                  {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {error && (
+            <div className="text-sm text-red-500">
+              {error}
+            </div>
+          )}
+
+          <button
+            type="submit"
+            disabled={loading}
+            className="flex w-full items-center justify-center gap-2 rounded-md bg-black px-4 py-2.5 text-sm font-medium text-white transition-opacity hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+            {loading ? "Signing in..." : "Continue"} <ArrowRight className="h-4 w-4" />
+          </button>
+        </form>
+
+        <div className="text-sm text-gray-500">
+          Don't have an account?{" "}
+          <Link href="/signup" className="text-black font-medium hover:underline underline-offset-4">
+            Sign up
           </Link>
-        </p>
-      </form>
+        </div>
+      </div>
     </div>
   );
 }
