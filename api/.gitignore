@@ -6,6 +6,14 @@ api.log
 main.exe
 *.exe
 
+# Environment variables (never commit secrets)
+.env
+.env.*
+!.env.example
+
+# Firebase service account
+firebase-service-account.json
+
 # Local files
 file_list.txt
 test_redis.ps1
