@@ -39,10 +39,10 @@ export default function LoginPage() {
     <div className="flex min-h-screen items-center justify-center bg-white p-4">
       <div className="w-full max-w-[360px] space-y-8">
         <div className="space-y-2">
-          <div className="h-8 w-8 bg-black rounded-lg mb-6 shadow-sm flex items-center justify-center">
+          <div className="h-8 w-8 bg-orange-500 rounded-lg mb-6 shadow-sm flex items-center justify-center">
             <span className="text-white text-xs font-bold font-mono">YH</span>
           </div>
-          <h1 className="text-2xl font-semibold tracking-tight text-black">Log in</h1>
+          <h1 className="text-2xl font-semibold tracking-tight text-gray-900">Log in</h1>
           <p className="text-sm text-gray-500">Sign in to your business dashboard.</p>
         </div>
 
@@ -56,7 +56,7 @@ export default function LoginPage() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
-                className="w-full rounded-md border border-gray-200 bg-transparent px-3 py-2 text-sm text-black placeholder-gray-400 focus:border-black focus:outline-none focus:ring-1 focus:ring-black transition-colors"
+                className="w-full rounded-md border border-gray-200 bg-transparent px-3 py-2 text-sm text-gray-900 placeholder-gray-400 focus:border-orange-500 focus:outline-none focus:ring-1 focus:ring-orange-500 transition-colors"
                 placeholder="name@company.com"
               />
             </div>
@@ -72,13 +72,13 @@ export default function LoginPage() {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   required
-                  className="w-full rounded-md border border-gray-200 bg-transparent px-3 py-2 text-sm text-black placeholder-gray-400 focus:border-black focus:outline-none focus:ring-1 focus:ring-black transition-colors pr-10"
+                  className="w-full rounded-md border border-gray-200 bg-transparent px-3 py-2 text-sm text-gray-900 placeholder-gray-400 focus:border-orange-500 focus:outline-none focus:ring-1 focus:ring-orange-500 transition-colors pr-10"
                   placeholder="Enter your password"
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-gray-400 hover:text-black transition-colors"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-gray-400 hover:text-gray-900 transition-colors"
                 >
                   {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </button>
@@ -95,16 +95,16 @@ export default function LoginPage() {
           <button
             type="submit"
             disabled={loading}
-            className="flex w-full items-center justify-center gap-2 rounded-md bg-black px-4 py-2.5 text-sm font-medium text-white transition-opacity hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
+            className="flex w-full items-center justify-center gap-2 rounded-md bg-orange-500 px-4 py-2.5 text-sm font-medium text-white transition-opacity hover:bg-orange-600 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-            {loading ? "Signing in..." : "Continue"} <ArrowRight className="h-4 w-4" />
+            {loading ? "Signing in..." : "Devam Et"} <ArrowRight className="h-4 w-4" />
           </button>
         </form>
 
         <div className="text-sm text-gray-500">
           Don't have an account?{" "}
-          <Link href="/signup" className="text-black font-medium hover:underline underline-offset-4">
+          <Link href="/signup" className="text-gray-900 font-medium hover:underline underline-offset-4">
             Sign up
           </Link>
         </div>

@@ -435,6 +435,7 @@ func main() {
 	// CORS Ayarı (Web ve Mobil'in API'ye erişebilmesi için)
 	corsOrigins := os.Getenv("CORS_ORIGINS")
 	if corsOrigins == "" {
+		log.Println("WARNING: CORS_ORIGINS is not set — defaulting to '*'. Set it to your production domain(s) before deploying.")
 		corsOrigins = "*"
 	}
 	app.Use(cors.New(cors.Config{
