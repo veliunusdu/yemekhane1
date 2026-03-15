@@ -1,10 +1,10 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 /// Production API URL — set this to your deployed backend HTTPS URL.
-/// For local development, override via --dart-define=API_BASE_URL=http://10.0.2.2:3001
+/// For local development, override via --dart-define=API_BASE_URL=http://localhost:3001
 const String _kApiBaseUrl = String.fromEnvironment(
   'API_BASE_URL',
-  defaultValue: 'https://api.yourdomain.com',
+  defaultValue: 'http://localhost:3001',
 );
 
 /// Returns the correct API base URL depending on the environment.
